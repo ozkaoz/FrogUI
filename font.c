@@ -22,13 +22,15 @@ static int load_font_file(const char *font_filename) {
         font_loaded = 0;
     }
 
-    // Build search paths for the font
-    char font_paths[2][256];
-    snprintf(font_paths[0], sizeof(font_paths[0]), "/mnt/sda1/frogui/fonts/%s", font_filename);
-    snprintf(font_paths[1], sizeof(font_paths[1]), "fonts/%s", font_filename);
+    // Build search paths for the font (SF3000 paths first)
+    char font_paths[4][256];
+    snprintf(font_paths[0], sizeof(font_paths[0]), "/mnt/sdcard/cubegm/fonts/%s", font_filename);
+    snprintf(font_paths[1], sizeof(font_paths[1]), "/mnt/sdcard/frogui/fonts/%s", font_filename);
+    snprintf(font_paths[2], sizeof(font_paths[2]), "/mnt/sda1/frogui/fonts/%s", font_filename);
+    snprintf(font_paths[3], sizeof(font_paths[3]), "fonts/%s", font_filename);
 
     FILE *fp = NULL;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 4; i++) {
         fp = fopen(font_paths[i], "rb");
         if (fp) break;
     }

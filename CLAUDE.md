@@ -35,9 +35,10 @@ FrogUI is a libretro-based file browser core for SF2000/GB300 handheld devices. 
 
 ### Git Commit Guidelines
 - All commit messages must be single line only
-- Never mention Claude, AI assistance, or automated generation
+- Never mention Claude, AI assistance, or automated generation in commits
 - Use present tense, imperative mood (e.g., "Add feature", "Fix bug")
 - Keep messages concise and descriptive
+- Author: Tomasz Zubertowski <tzubertowski@gmail.com>
 
 ### Testing and Debugging
 - Test on actual SF2000 hardware when possible

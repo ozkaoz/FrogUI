@@ -5,9 +5,9 @@
 #include <stddef.h>
 #include "theme.h"
 
-// Screen dimensions
-#define SCREEN_WIDTH 320
-#define SCREEN_HEIGHT 240
+// Screen dimensions - FrogUI renders at 480x320, centered on 854x480 display
+#define SCREEN_WIDTH 480
+#define SCREEN_HEIGHT 320
 
 // Colors are now provided by the theme system
 // Legacy defines for backwards compatibility - will be removed
@@ -53,7 +53,7 @@ void render_fill_rect(uint16_t *framebuffer, int x, int y, int width, int height
 void render_rounded_rect(uint16_t *framebuffer, int x, int y, int width, int height, int radius, uint16_t color);
 
 // Draw a text pillbox with proper padding (unified method)
-void render_text_pillbox(uint16_t *framebuffer, int x, int y, const char *text, 
+void render_text_pillbox(uint16_t *framebuffer, int x, int y, const char *text,
                         uint16_t bg_color, uint16_t text_color, int padding);
 
 // Draw menu header with title
@@ -73,7 +73,7 @@ void render_menu_item(uint16_t *framebuffer, int index, const char *name, int is
 
 // Thumbnail functions
 typedef struct {
-    uint16_t *data;
+    uint16_t *data;  // Changed to uint16_t for ARGB8888
     int width;
     int height;
 } Thumbnail;
@@ -81,7 +81,7 @@ typedef struct {
 // Load thumbnail from PNG file
 int load_thumbnail(const char *png_path, Thumbnail *thumb);
 
-// Load raw RGB565 file (fallback)
+// Load raw RGB565 file (fallback) - converts to ARGB8888
 int load_raw_rgb565(const char *path, Thumbnail *thumb);
 
 // Free thumbnail memory

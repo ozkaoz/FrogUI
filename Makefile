@@ -32,6 +32,20 @@ ifeq ($(platform), sf2000)
    CFLAGS += -O3 -DSF2000 -DNDEBUG  # -O3 for speed, NDEBUG removes asserts
    CXXFLAGS := $(CFLAGS)
    STATIC_LINKING = 1
+else ifeq ($(platform), sf3000)
+   TARGET := $(TARGET_NAME)_libretro.so
+   MIPS=$(HOME)/sf3000-work/sf3000toolchain/mipsel-buildroot-linux-gnu_sdk-buildroot/opt/ext-toolchain/bin/mips-mti-linux-gnu-
+   SYSROOT=$(HOME)/sf3000-work/sf3000toolchain/mipsel-buildroot-linux-gnu_sdk-buildroot/mipsel-buildroot-linux-gnu/sysroot
+   CC = $(MIPS)gcc
+   CXX = $(MIPS)g++
+   AR = $(MIPS)ar
+   CFLAGS = -mips32r2 -march=mips32r2 -mtune=24kc -mfp32 -mhard-float -mlong-calls -EL --sysroot=$(SYSROOT) -fPIC
+   CFLAGS += -Wall -fdata-sections -ffunction-sections -I./ -I$(SYSROOT)/usr/include
+   CFLAGS += -Ofast -DPLATFORM_SF3000 -DNDEBUG
+   CXXFLAGS := $(CFLAGS)
+   LDFLAGS += -L$(SYSROOT)/usr/lib -lc -ldl -lgcc -lm -lpthread
+   SHARED := -shared -Wl,--no-undefined
+   fpic := -fPIC
 else
    # Default unix build for testing
    EXT ?= so

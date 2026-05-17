@@ -17,6 +17,7 @@ typedef struct {
     uint16_t disabled;
 } Theme;
 
+// RGB565 color format
 #define RGB565(r, g, b) (((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3))
 
 extern const Theme themes[];

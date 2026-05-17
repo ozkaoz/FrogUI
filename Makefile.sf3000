@@ -1,0 +1,105 @@
+# Makefile for FrogUI SF3000 standalone binary
+TARGET = frogui
+MIPS=$(HOME)/sf3000-work/sf3000toolchain/mipsel-buildroot-linux-gnu_sdk-buildroot/opt/ext-toolchain/bin/mips-mti-linux-gnu-
+SYSROOT=$(HOME)/sf3000-work/sf3000toolchain/mipsel-buildroot-linux-gnu_sdk-buildroot/mipsel-buildroot-linux-gnu/sysroot
+
+CC = $(MIPS)gcc
+STRIP = $(MIPS)strip
+
+# Compiler flags for SF3000
+CFLAGS = -mips32r2 -march=mips32r2 -mtune=24kc -mfp32 -mhard-float -mlong-calls \
+        -EL --sysroot=$(SYSROOT) -fPIC \
+        -Wall -Wextra \
+        -Ofast -DPLATFORM_SF3000 -DNDEBUG \
+        -DSCREEN_WIDTH=480 -DSCREEN_HEIGHT=320
+
+# Include paths
+INCLUDES = -I$(SYSROOT)/usr/include
+
+# Linker flags
+LDFLAGS = -L$(SYSROOT)/usr/lib -lc -lm -lpthread -ldl
+
+# Source files for SF3000 standalone build
+SOURCES = frogos_sf3000.c \
+          font.c \
+          render.c \
+          theme.c \
+          settings.c \
+          recent_games.c \
+          favorites.c \
+          fbdev.c \
+          input.c
+
+# Source files for libretro core (picoarch loads this)
+LIBRETRO_SOURCES = frogui_libretro.c \
+                   font.c \
+                   render.c \
+                   theme.c \
+                   settings.c \
+                   recent_games.c \
+                   favorites.c
+
+LIBRETRO_TARGET = frogui_libretro.so
+
+# Object files
+OBJECTS = $(SOURCES:.c=.o)
+LIBRETRO_OBJECTS = $(LIBRETRO_SOURCES:.c=.lo)
+
+# Default target
+all: $(TARGET) $(LIBRETRO_TARGET)
+
+# Build the standalone binary
+$(TARGET): $(OBJECTS)
+	@echo "Linking $@..."
+	$(CC) $(CFLAGS) -o $@ $(OBJECTS) $(LDFLAGS)
+	$(STRIP) $@
+	@echo "Built $@ successfully!"
+
+# Build libretro core .so
+$(LIBRETRO_TARGET): $(LIBRETRO_OBJECTS)
+	@echo "Linking $@..."
+	$(CC) $(CFLAGS) -shared -o $@ $(LIBRETRO_OBJECTS) -L$(SYSROOT)/usr/lib -lc -lm
+	$(STRIP) $@
+	@echo "Built $@ successfully!"
+
+# Compile source files (standalone)
+%.o: %.c
+	@echo "Compiling $<..."
+	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $<
+
+# Compile source files (libretro, separate objects)
+%.lo: %.c
+	@echo "Compiling $< (libretro)..."
+	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $<
+
+# Clean build artifacts
+clean:
+	rm -f $(OBJECTS) $(LIBRETRO_OBJECTS) $(TARGET) $(LIBRETRO_TARGET)
+
+# Install to SD card (requires SD to be mounted)
+install: $(TARGET)
+	@echo "Installing to SD card..."
+	@if [ -d "/run/media/tomaszz/596B-E19B/cubegm" ]; then \
+		cp $(TARGET) /run/media/tomaszz/596B-E19B/cubegm/; \
+		chmod +x /run/media/tomaszz/596B-E19B/cubegm/$(TARGET); \
+		echo "Installed successfully!"; \
+	else \
+		echo "Error: SD card not mounted at /run/media/tomaszz/596B-E19B"; \
+		exit 1; \
+	fi
+
+# Help target
+help:
+	@echo "FrogUI SF3000 Build System"
+	@echo ""
+	@echo "Targets:"
+	@echo "  all      - Build frogui binary (default)"
+	@echo "  clean    - Remove build artifacts"
+	@echo "  install  - Install to SD card"
+	@echo "  help     - Show this help message"
+	@echo ""
+	@echo "Requirements:"
+	@echo "  - SF3000 toolchain at: $(HOME)/sf3000-work/sf3000toolchain"
+	@echo "  - SD card mounted at: /run/media/tomaszz/596B-E19B"
+
+.PHONY: all clean install help
