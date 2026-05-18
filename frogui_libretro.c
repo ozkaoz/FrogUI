@@ -12,6 +12,11 @@
 #include <string.h>
 #include <stdint.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <signal.h>
+#include <unistd.h>
 #include <dirent.h>
 #include <stdbool.h>
 
@@ -73,6 +78,45 @@ static int scroll_offset    = 0;
 static uint16_t *framebuffer = NULL;
 static bool shutdown_requested = false;
 
+static void dbg(const char *msg) {
+    FILE *f = fopen("/tmp/frogui_crash.log", "a");
+    if (f) { fputs(msg, f); fputs("\n", f); fclose(f); }
+    fprintf(stderr, "FROGUI_DBG: %s\n", msg);
+}
+
+/* --- Cubevol direct input (picoarch input_state_cb returns nothing on SF3000) --- */
+#define CV_UP     4
+#define CV_DOWN   6
+#define CV_LEFT   7
+#define CV_RIGHT  5
+#define CV_A     13
+#define CV_B     14
+#define CV_X     12
+#define CV_Y     15
+#define CV_L     10
+#define CV_R     11
+#define CV_SEL    0
+#define CV_START  3
+
+static volatile uint32_t *cv_keys = NULL;
+static int cv_shmid = -1;
+
+static void cv_init(void) {
+    key_t key = ftok("/tmp/joy_key", 'a');
+    if (key == (key_t)-1) { dbg("cv_init: ftok failed"); return; }
+    cv_shmid = shmget(key, 4, 0666);
+    if (cv_shmid < 0) { dbg("cv_init: shmget failed"); return; }
+    cv_keys = (volatile uint32_t *)shmat(cv_shmid, NULL, 0);
+    if (cv_keys == (void *)-1) { cv_keys = NULL; dbg("cv_init: shmat failed"); return; }
+    dbg("cv_init: OK");
+}
+
+static uint32_t cv_read(void) {
+    return cv_keys ? (*cv_keys & 0xFFFF) : 0;
+}
+
+static bool cv_btn(uint32_t state, int bit) { return (state >> bit) & 1; }
+
 static const char* get_basename(const char *path) {
     const char *b = strrchr(path, '/');
     return b ? b+1 : path;
@@ -133,26 +177,30 @@ static void scan_directory(const char *path) {
 }
 
 static void request_game_launch(const char *core_path, const char *rom_path) {
-    /* Write launch info so icube can read it after picoarch exits */
+    /* Write launch file as fallback for icube loop */
     FILE *f = fopen(LAUNCH_FILE, "w");
     if (f) {
         fprintf(f, "%s\n%s\n", core_path, rom_path);
         fflush(f);
         fclose(f);
     }
-    shutdown_requested = true;
+    /* Direct exec — replace this picoarch process with a new picoarch+game.
+       Kernel closes all fds (including /dev/dis), new picoarch inits cleanly. */
+    dbg("execl picoarch");
+    execl("/mnt/sdcard/cubegm/picoarch", "picoarch", core_path, rom_path, (char*)NULL);
+    /* execl failed, fall back to exit */
+    dbg("execl failed, exit");
+    exit(0);
 }
 
 static void handle_input(void) {
-    if (!input_poll_cb || !input_state_cb) return;
-    input_poll_cb();
-
     static bool a_last=false, b_last=false, up_last=false, dn_last=false;
 
-    bool a  = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A);
-    bool b  = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B);
-    bool up = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP);
-    bool dn = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN);
+    uint32_t keys = cv_read();
+    bool a  = cv_btn(keys, CV_A);
+    bool b  = cv_btn(keys, CV_B);
+    bool up = cv_btn(keys, CV_UP);
+    bool dn = cv_btn(keys, CV_DOWN);
 
     if (a && !a_last && selected_index < entry_count) {
         if (entries[selected_index].is_dir) {
@@ -169,10 +217,16 @@ static void handle_input(void) {
             } else {
                 const char *folder = get_basename(current_path);
                 const char *core   = get_core_for_folder(folder);
+                dbg("A pressed: file selected");
+                dbg(entries[selected_index].name);
+                dbg(folder);
                 if (core) {
+                    dbg(core);
                     char rom_path[MAX_PATH_LEN];
                     snprintf(rom_path, sizeof(rom_path), "%s/%s", current_path, entries[selected_index].name);
                     request_game_launch(core, rom_path);
+                } else {
+                    dbg("no core mapping for folder");
                 }
             }
         }
@@ -234,13 +288,10 @@ void retro_set_audio_sample_batch(retro_audio_sample_batch_t cb){ (void)cb; }
 void retro_set_input_poll(retro_input_poll_t cb)                { input_poll_cb = cb; }
 void retro_set_input_state(retro_input_state_t cb)              { input_state_cb = cb; }
 
-static void dbg(const char *msg) {
-    FILE *f = fopen("/mnt/sdcard/frogui_crash.log", "a");
-    if (f) { fputs(msg, f); fputs("\n", f); fclose(f); }
-}
 
 void retro_init(void) {
     dbg("retro_init start");
+    cv_init();
     font_init();
     dbg("font_init done");
     theme_init();
@@ -296,8 +347,10 @@ void retro_run(void) {
         video_cb(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * sizeof(uint16_t));
 
     /* Signal picoarch to exit so icube can launch the selected game */
-    if (shutdown_requested && environ_cb)
+    if (shutdown_requested && environ_cb) {
+        dbg("sending SHUTDOWN");
         environ_cb(RETRO_ENVIRONMENT_SHUTDOWN, NULL);
+    }
 }
 
 void retro_reset(void) { scan_directory(ROMS_PATH); strncpy(current_path, ROMS_PATH, MAX_PATH_LEN-1); }
