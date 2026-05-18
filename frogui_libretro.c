@@ -15,7 +15,7 @@
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
-#include <signal.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <dirent.h>
 #include <stdbool.h>
@@ -177,20 +177,20 @@ static void scan_directory(const char *path) {
 }
 
 static void request_game_launch(const char *core_path, const char *rom_path) {
-    /* Write launch file as fallback for icube loop */
-    FILE *f = fopen(LAUNCH_FILE, "w");
-    if (f) {
-        fprintf(f, "%s\n%s\n", core_path, rom_path);
-        fflush(f);
-        fclose(f);
+    dbg("fork picoarch");
+    pid_t pid = fork();
+    if (pid == 0) {
+        /* Child: replace with picoarch+game */
+        execl("/mnt/sdcard/cubegm/picoarch", "picoarch", core_path, rom_path, (char*)NULL);
+        _exit(127);
+    } else if (pid > 0) {
+        /* Parent: wait for game to finish, then return to frogui menu */
+        int status;
+        waitpid(pid, &status, 0);
+        dbg("game finished, returning to frogui");
+    } else {
+        dbg("fork failed");
     }
-    /* Direct exec — replace this picoarch process with a new picoarch+game.
-       Kernel closes all fds (including /dev/dis), new picoarch inits cleanly. */
-    dbg("execl picoarch");
-    execl("/mnt/sdcard/cubegm/picoarch", "picoarch", core_path, rom_path, (char*)NULL);
-    /* execl failed, fall back to exit */
-    dbg("execl failed, exit");
-    exit(0);
 }
 
 static void handle_input(void) {
