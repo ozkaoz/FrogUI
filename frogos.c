@@ -1075,7 +1075,7 @@ static void render_menu() {
     // Draw header with current folder name
     const char *display_path = current_path;
     if (strcmp(current_path, ROMS_PATH) == 0) {
-        display_path = "FROGUI: SYSTEMS";  // Marketing branding
+        display_path = "TREEFROGUI: SYSTEMS";  // Marketing branding
     } else {
         // Show just the folder name, not full path
         display_path = get_basename(current_path);
@@ -1878,7 +1878,7 @@ void retro_set_controller_port_device(unsigned port, unsigned device) {
 
 void retro_get_system_info(struct retro_system_info *info) {
     memset(info, 0, sizeof(*info));
-    info->library_name     = "FrogUI";
+    info->library_name     = "TreeFrogUI";
     info->library_version  = "0.1";
     info->need_fullpath    = false;
     info->valid_extensions = "frogui";

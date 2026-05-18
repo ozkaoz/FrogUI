@@ -87,7 +87,7 @@ static uint16_t *framebuffer = NULL;
 
 // Logging function
 static void log_message(const char *msg) {
-    fprintf(stderr, "FROGUI: %s\n", msg);  // goes to frogui.log via icube redirect
+    fprintf(stderr, "TREEFROGUI: %s\n", msg);  // goes to frogui.log via icube redirect
     FILE *log = fopen("/mnt/sdcard/frogui_debug.log", "a");
     if (log) {
         fprintf(log, "%s\n", msg);
@@ -317,7 +317,7 @@ static void handle_input(void) {
 static void render_screen(void) {
     render_clear_screen(framebuffer);
 
-    const char *title = (strcmp(current_path, ROMS_PATH) == 0) ? "FROGUI: SYSTEMS" : get_basename(current_path);
+    const char *title = (strcmp(current_path, ROMS_PATH) == 0) ? "TREEFROGUI: SYSTEMS" : get_basename(current_path);
     render_header(framebuffer, title);
 
     int visible_count = min(entry_count - scroll_offset, VISIBLE_ENTRIES);

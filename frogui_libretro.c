@@ -202,7 +202,7 @@ unsigned retro_api_version(void) { return RETRO_API_VERSION; }
 
 void retro_get_system_info(struct retro_system_info *info) {
     memset(info, 0, sizeof(*info));
-    info->library_name     = "FrogUI";
+    info->library_name     = "TreeFrogUI";
     info->library_version  = "1.0-sf3000";
     info->valid_extensions = "";
     info->need_fullpath    = false;
@@ -281,7 +281,7 @@ void retro_run(void) {
     /* Render menu to RGB565 framebuffer */
     render_clear_screen(framebuffer);
     const char *title = (strcmp(current_path, ROMS_PATH) == 0)
-                        ? "FROGUI: SYSTEMS" : get_basename(current_path);
+                        ? "TREEFROGUI: SYSTEMS" : get_basename(current_path);
     render_header(framebuffer, title);
     int visible = min(entry_count - scroll_offset, VISIBLE_ENTRIES);
     for (int i = 0; i < visible; i++) {
