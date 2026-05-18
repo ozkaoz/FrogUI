@@ -119,23 +119,29 @@ void render_header(uint16_t *framebuffer, const char *title) {
 void render_legend(uint16_t *framebuffer, int x_button_mode) {
     if (!framebuffer) return;
 
-    int legend_y = SCREEN_HEIGHT - 24;
-    int spacing = 8; // Space between legend items
+    int pill_h   = ITEM_HEIGHT - UI_S(4);          /* pill height matches item scale */
+    int legend_y = SCREEN_HEIGHT - pill_h - UI_S(6); /* top of pill */
+    int text_y   = legend_y + (pill_h - (int)(20.0f * UI_SCALE / 100.0f)) / 2; /* vertically centre text in pill */
+    int spacing  = UI_S(8);
 
-    // Draw "SEL - SETTINGS" legend in bottom right with highlight
-    const char *settings_legend = " SEL - SETTINGS ";
-    int settings_width = font_measure_text(settings_legend);
-    int settings_x = SCREEN_WIDTH - settings_width - 12;
-    render_rounded_rect(framebuffer, settings_x - 4, legend_y - 2, settings_width + 8, 20, 10, COLOR_LEGEND_BG);
-    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, settings_x, legend_y, settings_legend, COLOR_LEGEND);
+    /* Right-anchored: A-ENTER  B-BACK (always), X hint to its left if active */
+    int anchor = SCREEN_WIDTH - PADDING;
 
-    // Draw X button legend to the left of settings
+    {
+        const char *nav = " A-ENTER  B-BACK ";
+        int w = font_measure_text(nav);
+        int x = anchor - w;
+        render_rounded_rect(framebuffer, x - 4, legend_y, w + 8, pill_h, UI_S(8), COLOR_LEGEND_BG);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, x, text_y, nav, COLOR_LEGEND);
+        anchor = x - spacing;
+    }
+
     if (x_button_mode != LEGEND_X_NONE) {
-        const char *x_legend = (x_button_mode == LEGEND_X_REMOVE) ? " X - REMOVE " : " X - FAVOURITE ";
-        int x_width = font_measure_text(x_legend);
-        int x_x = settings_x - x_width - spacing - 12;
-        render_rounded_rect(framebuffer, x_x - 4, legend_y - 2, x_width + 8, 20, 10, COLOR_LEGEND_BG);
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, x_x, legend_y, x_legend, COLOR_LEGEND);
+        const char *xl = (x_button_mode == LEGEND_X_REMOVE) ? " X-REMOVE " : " X-FAV ";
+        int w = font_measure_text(xl);
+        int x = anchor - w;
+        render_rounded_rect(framebuffer, x - 4, legend_y, w + 8, pill_h, UI_S(8), COLOR_LEGEND_BG);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, x, text_y, xl, COLOR_LEGEND);
     }
 }
 

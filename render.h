@@ -5,40 +5,60 @@
 #include <stddef.h>
 #include "theme.h"
 
-// Screen dimensions - FrogUI renders at 480x320, centered on 854x480 display
-#define SCREEN_WIDTH 480
+/*
+ * Screen dimensions — set via Makefile:
+ *   -DSCREEN_WIDTH=854 -DSCREEN_HEIGHT=480
+ * Default to SF2000 reference resolution if not set.
+ */
+#ifndef SCREEN_WIDTH
+#define SCREEN_WIDTH  480
+#endif
+#ifndef SCREEN_HEIGHT
 #define SCREEN_HEIGHT 320
+#endif
+
+/*
+ * UI_SCALE — integer scale factor (100 = 1x baseline, 200 = 2x, 150 = 1.5x)
+ * Baseline layout designed for 480x320. Set via Makefile:
+ *   -DUI_SCALE=200   (SF3000 854x480)
+ *   -DUI_SCALE=100   (SF2000 480x320)
+ */
+#ifndef UI_SCALE
+#define UI_SCALE 100
+#endif
+
+/* Scale a baseline constant by UI_SCALE */
+#define UI_S(x) ((x) * UI_SCALE / 100)
 
 // Colors are now provided by the theme system
-// Legacy defines for backwards compatibility - will be removed
-#define COLOR_BG        theme_bg()
-#define COLOR_TEXT      theme_text()
-#define COLOR_SELECT_BG theme_select_bg()
+#define COLOR_BG          theme_bg()
+#define COLOR_TEXT        theme_text()
+#define COLOR_SELECT_BG   theme_select_bg()
 #define COLOR_SELECT_TEXT theme_select_text()
-#define COLOR_HEADER    theme_header()
-#define COLOR_FOLDER    theme_folder()
-#define COLOR_LEGEND    theme_legend()
-#define COLOR_LEGEND_BG theme_legend_bg()
-#define COLOR_DISABLED  theme_disabled()
+#define COLOR_HEADER      theme_header()
+#define COLOR_FOLDER      theme_folder()
+#define COLOR_LEGEND      theme_legend()
+#define COLOR_LEGEND_BG   theme_legend_bg()
+#define COLOR_DISABLED    theme_disabled()
 
-// MinUI Layout Constants
-#define HEADER_HEIGHT 30
-#define ITEM_HEIGHT 24
-#define PADDING 16
-#define START_Y 40
-#define VISIBLE_ENTRIES 7  // 7 items as requested
+// Layout — all derived from UI_SCALE
+#define HEADER_HEIGHT UI_S(30)
+#define ITEM_HEIGHT   UI_S(24)
+#define PADDING       UI_S(16)
+#define START_Y       UI_S(40)
+#define VISIBLE_ENTRIES ((SCREEN_HEIGHT - START_Y - ITEM_HEIGHT) / ITEM_HEIGHT)
 
-// Thumbnail layout - rendered as BACKGROUND on the right side
-#define THUMBNAIL_AREA_X 160    // Start thumbnail area 
-#define THUMBNAIL_AREA_Y 40     // Start from header
-#define THUMBNAIL_MAX_WIDTH 160 // Full width to screen edge (320-160=160) 
-#define THUMBNAIL_MAX_HEIGHT 200 // Support up to 200px height as requested
+// Thumbnail layout
+#define THUMBNAIL_AREA_X     UI_S(160)
+#define THUMBNAIL_AREA_Y     UI_S(40)
+#define THUMBNAIL_MAX_WIDTH  UI_S(160)
+#define THUMBNAIL_MAX_HEIGHT UI_S(200)
 
-// Text scrolling for filenames
-#define MAX_FILENAME_DISPLAY_LEN 20 // Max length for selected item (with scrolling)
-#define MAX_UNSELECTED_DISPLAY_LEN 10 // Max length for unselected items (to avoid thumbnail overlap)
-#define SCROLL_DELAY_FRAMES 60      // Delay before scrolling starts (1 second at 60fps)
-#define SCROLL_SPEED_FRAMES 8       // Frames between scroll steps (slower = easier to read)
+// Text — more chars visible at larger scales (wider screen)
+#define MAX_FILENAME_DISPLAY_LEN   (20 * UI_SCALE / 100)
+#define MAX_UNSELECTED_DISPLAY_LEN (10 * UI_SCALE / 100)
+#define SCROLL_DELAY_FRAMES 60
+#define SCROLL_SPEED_FRAMES 8
 
 // Initialize rendering system
 void render_init(uint16_t *framebuffer);

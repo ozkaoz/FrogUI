@@ -11,7 +11,10 @@ static unsigned char *font_buffer = NULL;
 static float font_scale;
 static int font_loaded = 0;
 
-#define FONT_SIZE 20.0f
+#ifndef UI_SCALE
+#define UI_SCALE 100
+#endif
+#define FONT_SIZE (20.0f * UI_SCALE / 100.0f)
 
 // Internal function to load a font file
 static int load_font_file(const char *font_filename) {
@@ -71,23 +74,17 @@ void font_load_from_settings(const char *font_name) {
     const char *font_filename = NULL;
     float custom_size = FONT_SIZE;
 
-    // Map font names to font files
-    if (strcmp(font_name, "GamePocket") == 0) {
-        font_filename = "GamePocket-Regular-ZeroKern.ttf";
-        custom_size = 18.0f; // GamePocket at 18px
-    } else if (strcmp(font_name, "Monogram") == 0) {
+    // Map font names to font files — always render at FONT_SIZE (scaled by UI_SCALE)
+    if (strcmp(font_name, "Monogram") == 0) {
         font_filename = "monogram.ttf";
-        custom_size = 16.0f; // Monogram works best at 16px
     } else {
-        // Default to GamePocket
         font_filename = "GamePocket-Regular-ZeroKern.ttf";
-        custom_size = 18.0f; // GamePocket at 18px
     }
+    custom_size = FONT_SIZE;  // use compile-time size, not hardcoded per-font px
 
     load_font_file(font_filename);
 
-    // Recalculate scale if custom size is different
-    if (custom_size != FONT_SIZE && font_loaded) {
+    if (font_loaded) {
         font_scale = stbtt_ScaleForPixelHeight(&font_info, custom_size);
     }
 }

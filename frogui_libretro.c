@@ -78,6 +78,8 @@ static const char* get_basename(const char *path) {
     return b ? b+1 : path;
 }
 
+#define SETTINGS_ENTRY_NAME ">> Settings"
+
 static void scan_directory(const char *path) {
     DIR *dir = opendir(path);
     if (!dir) return;
@@ -114,6 +116,18 @@ static void scan_directory(const char *path) {
                  strcasecmp(entries[i].name, entries[j].name) > 0)) {
                 DirEntry tmp = entries[i]; entries[i] = entries[j]; entries[j] = tmp;
             }
+    /* Append Settings shortcut at root level */
+    if (strcmp(path, ROMS_PATH) == 0) {
+        if (entry_count >= entry_capacity) {
+            entry_capacity = entry_capacity ? entry_capacity*2 : INITIAL_ENTRIES_CAPACITY;
+            entries = realloc(entries, entry_capacity * sizeof(DirEntry));
+        }
+        strncpy(entries[entry_count].name, SETTINGS_ENTRY_NAME, 255);
+        entries[entry_count].name[255] = '\0';
+        entries[entry_count].is_dir = 0;  /* treat as file so it appears last */
+        entry_count++;
+    }
+
     selected_index = 0;
     scroll_offset  = 0;
 }
@@ -148,12 +162,18 @@ static void handle_input(void) {
             current_path[MAX_PATH_LEN-1] = '\0';
             scan_directory(current_path);
         } else {
-            const char *folder = get_basename(current_path);
-            const char *core   = get_core_for_folder(folder);
-            if (core) {
-                char rom_path[MAX_PATH_LEN];
-                snprintf(rom_path, sizeof(rom_path), "%s/%s", current_path, entries[selected_index].name);
-                request_game_launch(core, rom_path);
+            /* Settings shortcut */
+            if (strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) == 0) {
+                settings_load();
+                settings_show_menu();
+            } else {
+                const char *folder = get_basename(current_path);
+                const char *core   = get_core_for_folder(folder);
+                if (core) {
+                    char rom_path[MAX_PATH_LEN];
+                    snprintf(rom_path, sizeof(rom_path), "%s/%s", current_path, entries[selected_index].name);
+                    request_game_launch(core, rom_path);
+                }
             }
         }
     }
@@ -214,17 +234,32 @@ void retro_set_audio_sample_batch(retro_audio_sample_batch_t cb){ (void)cb; }
 void retro_set_input_poll(retro_input_poll_t cb)                { input_poll_cb = cb; }
 void retro_set_input_state(retro_input_state_t cb)              { input_state_cb = cb; }
 
+static void dbg(const char *msg) {
+    FILE *f = fopen("/mnt/sdcard/frogui_crash.log", "a");
+    if (f) { fputs(msg, f); fputs("\n", f); fclose(f); }
+}
+
 void retro_init(void) {
+    dbg("retro_init start");
     font_init();
+    dbg("font_init done");
     theme_init();
+    dbg("theme_init done");
     settings_init();
+    dbg("settings_init done");
     recent_games_init();
+    dbg("recent_games_init done");
     favorites_init();
+    dbg("favorites_init done");
 
     framebuffer = calloc(SCREEN_WIDTH * SCREEN_HEIGHT, sizeof(uint16_t));
+    dbg("calloc done");
     render_init(framebuffer);
+    dbg("render_init done");
     scan_directory(current_path);
+    dbg("scan_directory done");
     shutdown_requested = false;
+    dbg("retro_init complete");
 }
 
 void retro_deinit(void) {

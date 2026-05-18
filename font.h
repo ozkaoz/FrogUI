@@ -20,9 +20,12 @@ void font_draw_text(uint16_t *framebuffer, int screen_width, int screen_height,
 // Measure text width in pixels
 int font_measure_text(const char *text);
 
-// Get font character width/height
-#define FONT_CHAR_WIDTH 18
-#define FONT_CHAR_HEIGHT 16
-#define FONT_CHAR_SPACING 13
+// Get font character width/height — scale with UI_SCALE
+#ifndef UI_SCALE
+#define UI_SCALE 100
+#endif
+#define FONT_CHAR_WIDTH    (18 * UI_SCALE / 100)
+#define FONT_CHAR_HEIGHT   (20 * UI_SCALE / 100)
+#define FONT_CHAR_SPACING  (13 * UI_SCALE / 100)
 
 #endif // FONT_H

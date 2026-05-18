@@ -11,7 +11,7 @@ CFLAGS = -mips32r2 -march=mips32r2 -mtune=24kc -mfp32 -mhard-float -mlong-calls 
         -EL --sysroot=$(SYSROOT) -fPIC \
         -Wall -Wextra \
         -Ofast -DPLATFORM_SF3000 -DNDEBUG \
-        -DSCREEN_WIDTH=480 -DSCREEN_HEIGHT=320
+        -DSCREEN_WIDTH=854 -DSCREEN_HEIGHT=480 -DUI_SCALE=150
 
 # Include paths
 INCLUDES = -I$(SYSROOT)/usr/include
