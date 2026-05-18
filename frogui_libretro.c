@@ -117,6 +117,69 @@ static uint32_t cv_read(void) {
 
 static bool cv_btn(uint32_t state, int bit) { return (state >> bit) & 1; }
 
+/* --- Settings ---
+ * Stored at /mnt/sdcard/frogui/settings.txt, key=value format.
+ * Two options: theme + font. */
+#define SETTINGS_DIR  "/mnt/sdcard/frogui"
+#define SETTINGS_FILE SETTINGS_DIR "/settings.txt"
+
+static const char *font_names[] = {"GamePocket", "Monogram"};
+#define FONT_COUNT 2
+
+static bool settings_menu_active = false;
+static int settings_menu_idx = 0;       /* which row: 0=theme, 1=font */
+static int settings_theme_idx = 0;
+static int settings_font_idx = 0;
+#define SETTINGS_ROW_COUNT 2
+
+static void mkdir_p(const char *path) {
+    char cmd[300];
+    snprintf(cmd, sizeof(cmd), "mkdir -p '%s'", path);
+    system(cmd);
+}
+
+static void settings_apply(void) {
+    extern const int theme_count;
+    if (settings_theme_idx < 0 || settings_theme_idx >= theme_count) settings_theme_idx = 0;
+    if (settings_font_idx < 0 || settings_font_idx >= FONT_COUNT) settings_font_idx = 0;
+    theme_apply(settings_theme_idx);
+    font_load_from_settings(font_names[settings_font_idx]);
+}
+
+static void settings_load_file(void) {
+    FILE *f = fopen(SETTINGS_FILE, "r");
+    if (!f) return;
+    char line[256];
+    extern const int theme_count;
+    extern const Theme themes[];
+    while (fgets(line, sizeof(line), f)) {
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        char *val = eq + 1;
+        char *nl = strchr(val, '\n'); if (nl) *nl = '\0';
+        char *cr = strchr(val, '\r'); if (cr) *cr = '\0';
+        if (strcmp(line, "theme") == 0) {
+            for (int i = 0; i < theme_count; i++)
+                if (strcmp(themes[i].name, val) == 0) { settings_theme_idx = i; break; }
+        } else if (strcmp(line, "font") == 0) {
+            for (int i = 0; i < FONT_COUNT; i++)
+                if (strcmp(font_names[i], val) == 0) { settings_font_idx = i; break; }
+        }
+    }
+    fclose(f);
+}
+
+static void settings_save_file(void) {
+    extern const Theme themes[];
+    mkdir_p(SETTINGS_DIR);
+    FILE *f = fopen(SETTINGS_FILE, "w");
+    if (!f) { dbg("settings save: fopen failed"); return; }
+    fprintf(f, "theme=%s\n", themes[settings_theme_idx].name);
+    fprintf(f, "font=%s\n", font_names[settings_font_idx]);
+    fclose(f);
+}
+
 static const char* get_basename(const char *path) {
     const char *b = strrchr(path, '/');
     return b ? b+1 : path;
@@ -195,12 +258,36 @@ static void request_game_launch(const char *core_path, const char *rom_path) {
 
 static void handle_input(void) {
     static bool a_last=false, b_last=false, up_last=false, dn_last=false;
+    static bool l_last=false, r_last=false;
 
     uint32_t keys = cv_read();
     bool a  = cv_btn(keys, CV_A);
     bool b  = cv_btn(keys, CV_B);
     bool up = cv_btn(keys, CV_UP);
     bool dn = cv_btn(keys, CV_DOWN);
+    bool lt = cv_btn(keys, CV_LEFT);
+    bool rt = cv_btn(keys, CV_RIGHT);
+
+    if (settings_menu_active) {
+        extern const int theme_count;
+        if (up && !up_last) settings_menu_idx = (settings_menu_idx - 1 + SETTINGS_ROW_COUNT) % SETTINGS_ROW_COUNT;
+        if (dn && !dn_last) settings_menu_idx = (settings_menu_idx + 1) % SETTINGS_ROW_COUNT;
+        if ((lt && !l_last) || (rt && !r_last)) {
+            int delta = (rt && !r_last) ? 1 : -1;
+            if (settings_menu_idx == 0) {
+                settings_theme_idx = (settings_theme_idx + delta + theme_count) % theme_count;
+            } else {
+                settings_font_idx = (settings_font_idx + delta + FONT_COUNT) % FONT_COUNT;
+            }
+            settings_apply();
+        }
+        if ((a && !a_last) || (b && !b_last)) {
+            settings_save_file();
+            settings_menu_active = false;
+        }
+        a_last=a; b_last=b; up_last=up; dn_last=dn; l_last=lt; r_last=rt;
+        return;
+    }
 
     if (a && !a_last && selected_index < entry_count) {
         if (entries[selected_index].is_dir) {
@@ -210,23 +297,16 @@ static void handle_input(void) {
             current_path[MAX_PATH_LEN-1] = '\0';
             scan_directory(current_path);
         } else {
-            /* Settings shortcut */
             if (strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) == 0) {
-                settings_load();
-                settings_show_menu();
+                settings_menu_active = true;
+                settings_menu_idx = 0;
             } else {
                 const char *folder = get_basename(current_path);
                 const char *core   = get_core_for_folder(folder);
-                dbg("A pressed: file selected");
-                dbg(entries[selected_index].name);
-                dbg(folder);
                 if (core) {
-                    dbg(core);
                     char rom_path[MAX_PATH_LEN];
                     snprintf(rom_path, sizeof(rom_path), "%s/%s", current_path, entries[selected_index].name);
                     request_game_launch(core, rom_path);
-                } else {
-                    dbg("no core mapping for folder");
                 }
             }
         }
@@ -247,7 +327,7 @@ static void handle_input(void) {
             scroll_offset = selected_index - VISIBLE_ENTRIES + 1;
     }
 
-    a_last=a; b_last=b; up_last=up; dn_last=dn;
+    a_last=a; b_last=b; up_last=up; dn_last=dn; l_last=lt; r_last=rt;
 }
 
 /* ---- libretro API ---- */
@@ -296,8 +376,9 @@ void retro_init(void) {
     dbg("font_init done");
     theme_init();
     dbg("theme_init done");
-    settings_init();
-    dbg("settings_init done");
+    settings_load_file();
+    settings_apply();
+    dbg("settings loaded");
     recent_games_init();
     dbg("recent_games_init done");
     favorites_init();
@@ -326,31 +407,52 @@ bool retro_load_game(const struct retro_game_info *info) {
 
 void retro_unload_game(void) {}
 
+static void render_settings_menu(void) {
+    extern const Theme themes[];
+    render_clear_screen(framebuffer);
+    render_header(framebuffer, "SETTINGS");
+
+    char line[128];
+    int y0 = START_Y;
+    /* Theme row */
+    snprintf(line, sizeof(line), "Theme: < %s >", themes[settings_theme_idx].name);
+    if (settings_menu_idx == 0) {
+        render_text_pillbox(framebuffer, PADDING, y0, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    } else {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y0, line, COLOR_TEXT);
+    }
+    /* Font row */
+    snprintf(line, sizeof(line), "Font: < %s >", font_names[settings_font_idx]);
+    int y1 = y0 + ITEM_HEIGHT;
+    if (settings_menu_idx == 1) {
+        render_text_pillbox(framebuffer, PADDING, y1, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    } else {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y1, line, COLOR_TEXT);
+    }
+    render_legend(framebuffer, LEGEND_X_NONE);
+}
+
 void retro_run(void) {
     handle_input();
 
-    /* Render menu to RGB565 framebuffer */
-    render_clear_screen(framebuffer);
-    const char *title = (strcmp(current_path, ROMS_PATH) == 0)
-                        ? "TREEFROGUI: SYSTEMS" : get_basename(current_path);
-    render_header(framebuffer, title);
-    int visible = min(entry_count - scroll_offset, VISIBLE_ENTRIES);
-    for (int i = 0; i < visible; i++) {
-        int idx = scroll_offset + i;
-        render_menu_item(framebuffer, i, entries[idx].name, entries[idx].is_dir,
-                         (idx == selected_index), scroll_offset, 0);
+    if (settings_menu_active) {
+        render_settings_menu();
+    } else {
+        render_clear_screen(framebuffer);
+        const char *title = (strcmp(current_path, ROMS_PATH) == 0)
+                            ? "TREEFROGUI: SYSTEMS" : get_basename(current_path);
+        render_header(framebuffer, title);
+        int visible = min(entry_count - scroll_offset, VISIBLE_ENTRIES);
+        for (int i = 0; i < visible; i++) {
+            int idx = scroll_offset + i;
+            render_menu_item(framebuffer, i, entries[idx].name, entries[idx].is_dir,
+                             (idx == selected_index), scroll_offset, 0);
+        }
+        render_legend(framebuffer, LEGEND_X_NONE);
     }
-    render_legend(framebuffer, LEGEND_X_NONE);
 
-    /* Hand frame to picoarch — it handles display rotation/scaling */
     if (video_cb)
         video_cb(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * sizeof(uint16_t));
-
-    /* Signal picoarch to exit so icube can launch the selected game */
-    if (shutdown_requested && environ_cb) {
-        dbg("sending SHUTDOWN");
-        environ_cb(RETRO_ENVIRONMENT_SHUTDOWN, NULL);
-    }
 }
 
 void retro_reset(void) { scan_directory(ROMS_PATH); strncpy(current_path, ROMS_PATH, MAX_PATH_LEN-1); }
