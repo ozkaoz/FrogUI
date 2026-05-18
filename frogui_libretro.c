@@ -33,17 +33,104 @@
 #define ROMS_PATH    SDCARD_BASE "/roms"
 #define LAUNCH_FILE  "/tmp/frogui_launch.txt"
 
-/* Console → core mapping (folder name determines core) */
+/* Console → core mapping (folder name → libretro .so)
+ * Folder names match /mnt/sdcard/roms/ subdirectories (gb300_multicore convention). */
 typedef struct { const char *console_name; const char *core_path; } ConsoleMapping;
 static const ConsoleMapping console_mappings[] = {
-    {"FC",    CORES_PATH "/fceumm_libretro.so"},
-    {"NES",   CORES_PATH "/quicknes_libretro.so"},
-    {"GBA",   CORES_PATH "/mgba_libretro.so"},
-    {"SFC",   CORES_PATH "/snes9x2005_plus_libretro.so"},
-    {"MD",    CORES_PATH "/picodrive_libretro.so"},
-    {"SMS",   CORES_PATH "/picodrive_libretro.so"},
-    {"GG",    CORES_PATH "/picodrive_libretro.so"},
-    {"Quake", CORES_PATH "/tyrquake_libretro.so"},
+    /* NES */
+    {"nes",    CORES_PATH "/fceumm_libretro.so"},
+    {"nesq",   CORES_PATH "/quicknes_libretro.so"},
+    {"nest",   CORES_PATH "/nestopia_libretro.so"},
+    {"FC",     CORES_PATH "/fceumm_libretro.so"},
+    {"NES",    CORES_PATH "/quicknes_libretro.so"},
+    /* SNES */
+    {"snes",   CORES_PATH "/snes9x2005_plus_libretro.so"},
+    {"snes02", CORES_PATH "/snes9x2002_libretro.so"},
+    {"SFC",    CORES_PATH "/snes9x2005_plus_libretro.so"},
+    /* Game Boy */
+    {"gb",     CORES_PATH "/gambatte_libretro.so"},
+    {"gbgb",   CORES_PATH "/gearboy_libretro.so"},
+    {"gbb",    CORES_PATH "/tgbdual_libretro.so"},
+    {"dblcherrygb", CORES_PATH "/gambatte_libretro.so"},
+    /* GBA */
+    {"gba",    CORES_PATH "/gpsp_libretro.so"},
+    {"gbav",   CORES_PATH "/vba_next_libretro.so"},
+    {"mgba",   CORES_PATH "/mgba_libretro.so"},
+    {"gbaf",   CORES_PATH "/mgba_libretro.so"},
+    {"GBA",    CORES_PATH "/gpsp_libretro.so"},
+    /* Sega */
+    {"sega",   CORES_PATH "/picodrive_libretro.so"},
+    {"gg",     CORES_PATH "/gearsystem_libretro.so"},
+    {"gpgx",   CORES_PATH "/genesis_plus_gx_libretro.so"},
+    {"MD",     CORES_PATH "/picodrive_libretro.so"},
+    {"SMS",    CORES_PATH "/picodrive_libretro.so"},
+    {"GG",     CORES_PATH "/gearsystem_libretro.so"},
+    /* Atari */
+    {"a26",    CORES_PATH "/stella2014_libretro.so"},
+    {"a5200",  CORES_PATH "/a5200_libretro.so"},
+    {"a78",    CORES_PATH "/prosystem_libretro.so"},
+    {"a800",   CORES_PATH "/atari800_libretro.so"},
+    /* Lynx */
+    {"lnx",    CORES_PATH "/handy_libretro.so"},
+    /* PC Engine */
+    {"pce",    CORES_PATH "/mednafen_pce_fast_libretro.so"},
+    {"pcesgx", CORES_PATH "/mednafen_supergrafx_libretro.so"},
+    /* Neo Geo Pocket */
+    {"ngpc",   CORES_PATH "/race_libretro.so"},
+    /* WonderSwan */
+    {"wswan",  CORES_PATH "/mednafen_wswan_libretro.so"},
+    {"wsv",    CORES_PATH "/potator_libretro.so"},
+    /* Virtual Boy */
+    {"vb",     CORES_PATH "/mednafen_vb_libretro.so"},
+    /* PC-FX */
+    {"pcfx",   CORES_PATH "/mednafen_pcfx_libretro.so"},
+    /* PC-8800 */
+    {"pc8800", CORES_PATH "/quasi88_libretro.so"},
+    /* MSX */
+    {"msx",    CORES_PATH "/bluemsx_libretro.so"},
+    /* C64 */
+    {"c64",    CORES_PATH "/vice_x64_libretro.so"},
+    {"c64sc",  CORES_PATH "/vice_x64sc_libretro.so"},
+    {"c64f",   CORES_PATH "/frodo_libretro.so"},
+    {"c64fc",  CORES_PATH "/frodo_libretro.so"},
+    {"vic20",  CORES_PATH "/vice_xvic_libretro.so"},
+    /* Amstrad */
+    {"amstrad",  CORES_PATH "/crocods_libretro.so"},
+    {"amstradb", CORES_PATH "/cap32_libretro.so"},
+    /* ZX Spectrum */
+    {"spec",   CORES_PATH "/fuse_libretro.so"},
+    {"zx81",   CORES_PATH "/81_libretro.so"},
+    /* Coleco */
+    {"col",    CORES_PATH "/gearcoleco_libretro.so"},
+    /* Ports / games */
+    {"Quake",  CORES_PATH "/tyrquake_libretro.so"},
+    {"outrun", CORES_PATH "/cannonball_libretro.so"},
+    {"wolf3d", CORES_PATH "/ecwolf_libretro.so"},
+    {"prboom", CORES_PATH "/prboom_libretro.so"},
+    {"cavestory", CORES_PATH "/nxengine_libretro.so"},
+    {"flashback", CORES_PATH "/reminiscence_libretro.so"},
+    {"xrick",  CORES_PATH "/xrick_libretro.so"},
+    {"gw",     CORES_PATH "/gw_libretro.so"},
+    {"jnb",    CORES_PATH "/jumpnbump_libretro.so"},
+    /* Misc */
+    {"fake08", CORES_PATH "/fake08_libretro.so"},
+    {"lowres-nx", CORES_PATH "/lowresnx_libretro.so"},
+    {"gme",    CORES_PATH "/gme_libretro.so"},
+    {"m2k",    CORES_PATH "/mame2000_libretro.so"},
+    {"pokem",  CORES_PATH "/pokemini_libretro.so"},
+    {"int",    CORES_PATH "/freeintv_libretro.so"},
+    {"fcf",    CORES_PATH "/freechaf_libretro.so"},
+    {"cdg",    CORES_PATH "/pocketcdg_libretro.so"},
+    {"chip8",  CORES_PATH "/jaxe_libretro.so"},
+    {"retro8", CORES_PATH "/retro8_libretro.so"},
+    {"arduboy",CORES_PATH "/arduous_libretro.so"},
+    {"vec",    CORES_PATH "/vecx_libretro.so"},
+    {"thom",   CORES_PATH "/theodore_libretro.so"},
+    {"o2em",   CORES_PATH "/o2em_libretro.so"},
+    {"xmil",   CORES_PATH "/x68k_libretro.so"},
+    {"geolith",CORES_PATH "/geolith_libretro.so"},
+    {"gong",   CORES_PATH "/gong_libretro.so"},
+    {"vapor",  CORES_PATH "/vaporspec_libretro.so"},
     {NULL, NULL}
 };
 
