@@ -72,12 +72,12 @@ SF3000 button input comes from `cubevol` — a daemon that writes a bitmask to
 shared memory at `/tmp/joy_key`. FrogUI reads it directly via `shmget/shmat`
 because picoarch does not route `input_state_cb` to libretro cores on this device.
 
-### sf3000_multicore
+### sf3000_treefrogui
 
 Separate repo that builds ~57 libretro emulator cores as MIPS32r2 Linux `.so`
 files using the SF3000 cross-toolchain. These are the actual emulators picoarch
 loads when a game is launched. See
-[sf3000_multicore/cores.md](https://github.com/tzubertowski/sf3000_multicore/blob/master/cores.md)
+[sf3000_treefrogui/cores.md](https://github.com/tzubertowski/sf3000_treefrogui/blob/master/cores.md)
 for the full folder→core mapping table.
 
 ### File layout on SD card
