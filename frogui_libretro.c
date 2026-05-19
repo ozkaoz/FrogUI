@@ -53,9 +53,10 @@ static const ConsoleMapping console_mappings[] = {
     {"gbb",    CORES_PATH "/tgbdual_libretro.so"},
     {"dblcherrygb", CORES_PATH "/gambatte_libretro.so"},
     /* GBA */
-    {"gba",    CORES_PATH "/gpsp_libretro.so"},
+    {"gba",    CORES_PATH "/mgba_libretro.so"},
     {"gbav",   CORES_PATH "/vba_next_libretro.so"},
     {"mgba",   CORES_PATH "/mgba_libretro.so"},
+    {"gbag",   CORES_PATH "/gpsp_libretro.so"},
     {"gbaf",   CORES_PATH "/mgba_libretro.so"},
     {"GBA",    CORES_PATH "/gpsp_libretro.so"},
     /* Sega */
