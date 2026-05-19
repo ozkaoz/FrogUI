@@ -131,6 +131,8 @@ static const ConsoleMapping console_mappings[] = {
     {"geolith",CORES_PATH "/geolith_libretro.so"},
     {"gong",   CORES_PATH "/gong_libretro.so"},
     {"vapor",  CORES_PATH "/vaporspec_libretro.so"},
+    {"amiga",  CORES_PATH "/uae_libretro.so"},
+    {"atari-st", CORES_PATH "/castaway_libretro.so"},
     {NULL, NULL}
 };
 
