@@ -135,9 +135,9 @@ static const ConsoleMapping console_mappings[] = {
     {"amiga",  CORES_PATH "/uae_libretro.so"},
     {"atari-st", CORES_PATH "/castaway_libretro.so"},
     /* PlayStation */
-    {"ps1",    CORES_PATH "/pcsx1_libretro.so"},
-    {"psx",    CORES_PATH "/pcsx1_libretro.so"},
-    {"PS",     CORES_PATH "/pcsx1_libretro.so"},
+    {"ps1",    CORES_PATH "/pcsx_rearmed_libretro.so"},
+    {"psx",    CORES_PATH "/pcsx_rearmed_libretro.so"},
+    {"PS",     CORES_PATH "/pcsx_rearmed_libretro.so"},
     {NULL, NULL}
 };
 
@@ -196,8 +196,8 @@ static const ExtensionMapping ext_mappings[] = {
     {".adf",  CORES_PATH "/uae_libretro.so"},
     {".st",   CORES_PATH "/castaway_libretro.so"},
     {".msa",  CORES_PATH "/castaway_libretro.so"},
-    {".cue",  CORES_PATH "/pcsx1_libretro.so"},
-    {".iso",  CORES_PATH "/pcsx1_libretro.so"},
+    {".cue",  CORES_PATH "/pcsx_rearmed_libretro.so"},
+    {".iso",  CORES_PATH "/pcsx_rearmed_libretro.so"},
     {NULL, NULL}
 };
 
