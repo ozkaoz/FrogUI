@@ -35,6 +35,71 @@ FrogUI is a libretro-based launcher that provides a simple, clean interface for 
 - FrogUI automatically determines which core to use based on the folder name
 - The game boots immediately with the appropriate emulator
 
+## SF3000 Architecture
+
+How the whole stack fits together on SF3000:
+
+```
+[boot] icube script (/mnt/sdcard/cubegm/icube)
+         │
+         └─► picoarch frogui_libretro.so    ← FrogUI runs AS a libretro core
+                  │
+                  │  user selects ROM
+                  │
+                  └─► fork()
+                         │
+                    [parent]          [child]
+                    waitpid()         picoarch <game_core.so> <rom>
+                    (blocks)               │
+                       │             game plays
+                       │             user exits
+                       │                  │
+                    resumes ◄─── child exits
+                    FrogUI menu
+```
+
+### Why fork+exec?
+
+picoarch holds `/dev/dis` (SF3000 display driver) open. A direct `exec()` would
+try to reinit the display on an already-open fd and get a black screen.
+`fork()` lets the parent keep `/dev/dis` alive while the child inherits it.
+`RETRO_ENVIRONMENT_SHUTDOWN` is silently ignored by picoarch on SF3000, so
+`fork+waitpid` is the only clean way to launch a game and return to the menu.
+
+### Input
+
+SF3000 button input comes from `cubevol` — a daemon that writes a bitmask to
+shared memory at `/tmp/joy_key`. FrogUI reads it directly via `shmget/shmat`
+because picoarch does not route `input_state_cb` to libretro cores on this device.
+
+### sf3000_multicore
+
+Separate repo that builds ~57 libretro emulator cores as MIPS32r2 Linux `.so`
+files using the SF3000 cross-toolchain. These are the actual emulators picoarch
+loads when a game is launched. See
+[sf3000_multicore/cores.md](https://github.com/tzubertowski/sf3000_multicore/blob/master/cores.md)
+for the full folder→core mapping table.
+
+### File layout on SD card
+
+```
+/mnt/sdcard/
+├── cubegm/
+│   ├── icube                  ← boot loop (starts cubevol, runs picoarch+frogui)
+│   ├── picoarch               ← libretro frontend binary
+│   ├── cores/
+│   │   ├── frogui_libretro.so ← this launcher
+│   │   ├── gpsp_libretro.so   ← GBA emulator (MIPS dynarec)
+│   │   └── ... (~57 cores)
+│   └── lib/                   ← shared libs for picoarch
+├── frogui/
+│   └── settings.txt           ← theme + font config
+├── FC/                        ← NES ROMs  → fceumm
+├── SFC/                       ← SNES ROMs → snes9x2005+
+├── GBA/                       ← GBA ROMs  → gpsp
+└── ...                        ← other systems
+```
+
 ## For Developers
 
 🔧 **[Development Guide](DEVELOPMENT.md)** - Building from source, technical details, and contribution guidelines
