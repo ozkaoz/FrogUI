@@ -534,7 +534,7 @@ void retro_run(void) {
         int visible = min(entry_count - scroll_offset, VISIBLE_ENTRIES);
         for (int i = 0; i < visible; i++) {
             int idx = scroll_offset + i;
-            render_menu_item(framebuffer, i, entries[idx].name, entries[idx].is_dir,
+            render_menu_item(framebuffer, idx, entries[idx].name, entries[idx].is_dir,
                              (idx == selected_index), scroll_offset, 0);
         }
         render_legend(framebuffer, LEGEND_X_NONE);
