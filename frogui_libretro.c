@@ -15,7 +15,6 @@
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
-#include <sys/wait.h>
 #include <unistd.h>
 #include <dirent.h>
 #include <stdbool.h>
@@ -139,9 +138,70 @@ static const ConsoleMapping console_mappings[] = {
 };
 
 static const char* get_core_for_folder(const char *folder) {
+    if (!folder) return NULL;
     for (int i = 0; console_mappings[i].console_name; i++)
         if (strcasecmp(console_mappings[i].console_name, folder) == 0)
             return console_mappings[i].core_path;
+    return NULL;
+}
+
+/* Extension fallback: when folder name doesn't match a console mapping,
+ * pick a core based on the ROM file extension. */
+typedef struct { const char *ext; const char *core_path; } ExtensionMapping;
+static const ExtensionMapping ext_mappings[] = {
+    {".nes",  CORES_PATH "/fceumm_libretro.so"},
+    {".fds",  CORES_PATH "/fceumm_libretro.so"},
+    {".unf",  CORES_PATH "/fceumm_libretro.so"},
+    {".sfc",  CORES_PATH "/snes9x2005_plus_libretro.so"},
+    {".smc",  CORES_PATH "/snes9x2005_plus_libretro.so"},
+    {".gba",  CORES_PATH "/gpsp_libretro.so"},
+    {".gb",   CORES_PATH "/gambatte_libretro.so"},
+    {".gbc",  CORES_PATH "/gambatte_libretro.so"},
+    {".md",   CORES_PATH "/picodrive_libretro.so"},
+    {".smd",  CORES_PATH "/picodrive_libretro.so"},
+    {".gen",  CORES_PATH "/picodrive_libretro.so"},
+    {".sms",  CORES_PATH "/picodrive_libretro.so"},
+    {".gg",   CORES_PATH "/gearsystem_libretro.so"},
+    {".pce",  CORES_PATH "/mednafen_pce_fast_libretro.so"},
+    {".sgx",  CORES_PATH "/mednafen_supergrafx_libretro.so"},
+    {".lnx",  CORES_PATH "/handy_libretro.so"},
+    {".lyx",  CORES_PATH "/handy_libretro.so"},
+    {".ngp",  CORES_PATH "/race_libretro.so"},
+    {".ngc",  CORES_PATH "/race_libretro.so"},
+    {".ws",   CORES_PATH "/mednafen_wswan_libretro.so"},
+    {".wsc",  CORES_PATH "/mednafen_wswan_libretro.so"},
+    {".vb",   CORES_PATH "/mednafen_vb_libretro.so"},
+    {".a26",  CORES_PATH "/stella2014_libretro.so"},
+    {".a52",  CORES_PATH "/a5200_libretro.so"},
+    {".a78",  CORES_PATH "/prosystem_libretro.so"},
+    {".min",  CORES_PATH "/pokemini_libretro.so"},
+    {".col",  CORES_PATH "/gearcoleco_libretro.so"},
+    {".int",  CORES_PATH "/freeintv_libretro.so"},
+    {".bin",  CORES_PATH "/freechaf_libretro.so"},
+    {".sv",   CORES_PATH "/potator_libretro.so"},
+    {".d64",  CORES_PATH "/vice_x64_libretro.so"},
+    {".tap",  CORES_PATH "/fuse_libretro.so"},
+    {".tzx",  CORES_PATH "/fuse_libretro.so"},
+    {".dsk",  CORES_PATH "/cap32_libretro.so"},
+    {".cdt",  CORES_PATH "/cap32_libretro.so"},
+    {".cas",  CORES_PATH "/atari800_libretro.so"},
+    {".xex",  CORES_PATH "/atari800_libretro.so"},
+    {".atr",  CORES_PATH "/atari800_libretro.so"},
+    {".vec",  CORES_PATH "/vecx_libretro.so"},
+    {".rom",  CORES_PATH "/o2em_libretro.so"},
+    {".adf",  CORES_PATH "/uae_libretro.so"},
+    {".st",   CORES_PATH "/castaway_libretro.so"},
+    {".msa",  CORES_PATH "/castaway_libretro.so"},
+    {NULL, NULL}
+};
+
+static const char* get_core_for_extension(const char *filename) {
+    if (!filename) return NULL;
+    const char *dot = strrchr(filename, '.');
+    if (!dot) return NULL;
+    for (int i = 0; ext_mappings[i].ext; i++)
+        if (strcasecmp(ext_mappings[i].ext, dot) == 0)
+            return ext_mappings[i].core_path;
     return NULL;
 }
 
@@ -276,6 +336,25 @@ static const char* get_basename(const char *path) {
     return b ? b+1 : path;
 }
 
+static const char* get_console_folder(const char *path) {
+    size_t roms_len = strlen(ROMS_PATH);
+    if (strncmp(path, ROMS_PATH, roms_len) == 0) {
+        const char *sub = path + roms_len;
+        if (*sub == '/') {
+            sub++;
+        }
+        static char console[64];
+        int i = 0;
+        while (sub[i] != '\0' && sub[i] != '/' && i < 63) {
+            console[i] = sub[i];
+            i++;
+        }
+        console[i] = '\0';
+        return console;
+    }
+    return NULL;
+}
+
 #define SETTINGS_ENTRY_NAME ">> Settings"
 
 static void scan_directory(const char *path) {
@@ -331,20 +410,12 @@ static void scan_directory(const char *path) {
 }
 
 static void request_game_launch(const char *core_path, const char *rom_path) {
-    dbg("fork picoarch");
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* Child: replace with picoarch+game */
-        execl("/mnt/sdcard/cubegm/picoarch", "picoarch", core_path, rom_path, (char*)NULL);
-        _exit(127);
-    } else if (pid > 0) {
-        /* Parent: wait for game to finish, then return to frogui menu */
-        int status;
-        waitpid(pid, &status, 0);
-        dbg("game finished, returning to frogui");
-    } else {
-        dbg("fork failed");
-    }
+    FILE *f = fopen(LAUNCH_FILE, "w");
+    if (!f) { dbg("failed to write launch file"); return; }
+    fprintf(f, "%s\n%s\n", core_path, rom_path);
+    fclose(f);
+    dbg("launch file written, requesting shutdown");
+    if (environ_cb) environ_cb(RETRO_ENVIRONMENT_SHUTDOWN, NULL);
 }
 
 static void handle_input(void) {
@@ -392,12 +463,17 @@ static void handle_input(void) {
                 settings_menu_active = true;
                 settings_menu_idx = 0;
             } else {
-                const char *folder = get_basename(current_path);
+                const char *folder = get_console_folder(current_path);
                 const char *core   = get_core_for_folder(folder);
+                /* Fallback: infer core from file extension if folder name didn't match */
+                if (!core)
+                    core = get_core_for_extension(entries[selected_index].name);
                 if (core) {
                     char rom_path[MAX_PATH_LEN];
                     snprintf(rom_path, sizeof(rom_path), "%s/%s", current_path, entries[selected_index].name);
                     request_game_launch(core, rom_path);
+                } else {
+                    dbg("no core mapping for this folder or extension");
                 }
             }
         }
@@ -414,6 +490,15 @@ static void handle_input(void) {
     }
     if (dn && !dn_last && selected_index < entry_count-1) {
         selected_index++;
+        if (selected_index >= scroll_offset + VISIBLE_ENTRIES)
+            scroll_offset = selected_index - VISIBLE_ENTRIES + 1;
+    }
+    if (lt && !l_last) {
+        selected_index = (selected_index >= VISIBLE_ENTRIES) ? selected_index - VISIBLE_ENTRIES : 0;
+        if (selected_index < scroll_offset) scroll_offset = selected_index;
+    }
+    if (rt && !r_last) {
+        selected_index = (selected_index + VISIBLE_ENTRIES < entry_count) ? selected_index + VISIBLE_ENTRIES : entry_count - 1;
         if (selected_index >= scroll_offset + VISIBLE_ENTRIES)
             scroll_offset = selected_index - VISIBLE_ENTRIES + 1;
     }
