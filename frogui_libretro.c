@@ -134,6 +134,10 @@ static const ConsoleMapping console_mappings[] = {
     {"vapor",  CORES_PATH "/vaporspec_libretro.so"},
     {"amiga",  CORES_PATH "/uae_libretro.so"},
     {"atari-st", CORES_PATH "/castaway_libretro.so"},
+    /* PlayStation */
+    {"ps1",    CORES_PATH "/pcsx1_libretro.so"},
+    {"psx",    CORES_PATH "/pcsx1_libretro.so"},
+    {"PS",     CORES_PATH "/pcsx1_libretro.so"},
     {NULL, NULL}
 };
 
@@ -192,6 +196,8 @@ static const ExtensionMapping ext_mappings[] = {
     {".adf",  CORES_PATH "/uae_libretro.so"},
     {".st",   CORES_PATH "/castaway_libretro.so"},
     {".msa",  CORES_PATH "/castaway_libretro.so"},
+    {".cue",  CORES_PATH "/pcsx1_libretro.so"},
+    {".iso",  CORES_PATH "/pcsx1_libretro.so"},
     {NULL, NULL}
 };
 
