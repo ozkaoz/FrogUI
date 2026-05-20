@@ -26,6 +26,7 @@
 #include "recent_games.h"
 #include "favorites.h"
 #include "settings.h"
+#include "banner.h"
 
 #define SDCARD_BASE  "/mnt/sdcard"
 #define CORES_PATH   SDCARD_BASE "/cubegm/cores"
@@ -235,6 +236,7 @@ static int scroll_offset    = 0;
 static uint16_t *framebuffer = NULL;
 static bool shutdown_requested = false;
 static bool viewing_recents = false;
+static bool viewing_favourites = false;
 
 static void dbg(const char *msg) {
     FILE *f = fopen("/tmp/frogui_crash.log", "a");
@@ -362,8 +364,36 @@ static const char* get_console_folder(const char *path) {
     return NULL;
 }
 
-#define SETTINGS_ENTRY_NAME ">> Settings"
-#define RECENTS_ENTRY_NAME  ">> Recents"
+#define SETTINGS_ENTRY_NAME    ">> Settings"
+#define RECENTS_ENTRY_NAME     ">> Recents"
+#define FAVOURITES_ENTRY_NAME  ">> Favourites"
+
+#define BANNER_DIR SDCARD_BASE "/frogui"
+
+static void load_banner_for_view(const char *path, bool is_recents, bool is_favourites) {
+    char img[512];
+    const char *exts[] = { "png", "jpg", "jpeg", "bmp", NULL };
+    if (is_recents) {
+        for (int i = 0; exts[i]; i++) {
+            snprintf(img, sizeof(img), BANNER_DIR "/recents.%s", exts[i]);
+            if (access(img, R_OK) == 0) { banner_load(img); return; }
+        }
+    } else if (is_favourites) {
+        for (int i = 0; exts[i]; i++) {
+            snprintf(img, sizeof(img), BANNER_DIR "/favourites.%s", exts[i]);
+            if (access(img, R_OK) == 0) { banner_load(img); return; }
+        }
+    } else {
+        const char *base = (path && *path) ? strrchr(path, '/') : NULL;
+        const char *name = base ? base + 1 : (path ? path : "main");
+        if (!name || !*name) name = "main";
+        for (int i = 0; exts[i]; i++) {
+            snprintf(img, sizeof(img), BANNER_DIR "/%s.%s", name, exts[i]);
+            if (access(img, R_OK) == 0) { banner_load(img); return; }
+        }
+    }
+    banner_clear();
+}
 
 static void scan_directory(const char *path) {
     DIR *dir = opendir(path);
@@ -401,9 +431,11 @@ static void scan_directory(const char *path) {
                  strcasecmp(entries[i].name, entries[j].name) > 0)) {
                 DirEntry tmp = entries[i]; entries[i] = entries[j]; entries[j] = tmp;
             }
-    /* Append Settings at end, prepend Recents at top */
+    /* Append Settings at end, prepend Recents+Favourites at top */
     if (strcmp(path, ROMS_PATH) == 0) {
-        int extras = 1 + (recent_games_get_count() > 0 ? 1 : 0);
+        int has_recents = recent_games_get_count() > 0 ? 1 : 0;
+        int has_favs    = favorites_get_count()    > 0 ? 1 : 0;
+        int extras = 1 + has_recents + has_favs;
         while (entry_count + extras > entry_capacity) {
             entry_capacity = entry_capacity ? entry_capacity*2 : INITIAL_ENTRIES_CAPACITY;
             entries = realloc(entries, entry_capacity * sizeof(DirEntry));
@@ -414,9 +446,16 @@ static void scan_directory(const char *path) {
         entries[entry_count].name[255] = '\0';
         entries[entry_count].is_dir = 0;
         entry_count++;
-        /* Prepend >> Recents first (shift everything right by 1) */
-        if (recent_games_get_count() > 0) {
-            memmove(&entries[1], &entries[0], (entry_count) * sizeof(DirEntry));
+        /* Prepend >> Favourites then >> Recents (Recents ends up at index 0) */
+        if (has_favs) {
+            memmove(&entries[1], &entries[0], entry_count * sizeof(DirEntry));
+            strncpy(entries[0].name, FAVOURITES_ENTRY_NAME, 255);
+            entries[0].name[255] = '\0';
+            entries[0].is_dir = 0;
+            entry_count++;
+        }
+        if (has_recents) {
+            memmove(&entries[1], &entries[0], entry_count * sizeof(DirEntry));
             strncpy(entries[0].name, RECENTS_ENTRY_NAME, 255);
             entries[0].name[255] = '\0';
             entries[0].is_dir = 0;
@@ -425,6 +464,7 @@ static void scan_directory(const char *path) {
     }
 done:
     viewing_recents = false;
+    viewing_favourites = false;
     selected_index = 0;
     scroll_offset  = 0;
 }
@@ -443,17 +483,19 @@ static void request_game_launch(const char *core_path, const char *rom_path) {
     char *dot = strrchr(game_name, '.');
     if (dot) *dot = '\0';
     recent_games_add(core_path, game_name, rom_path);
+    sync(); /* flush FAT32 before exec */
     dbg("launch file written, requesting shutdown");
     if (environ_cb) environ_cb(RETRO_ENVIRONMENT_SHUTDOWN, NULL);
 }
 
 static void handle_input(void) {
     static bool a_last=false, b_last=false, up_last=false, dn_last=false;
-    static bool l_last=false, r_last=false;
+    static bool l_last=false, r_last=false, y_last=false;
 
     uint32_t keys = cv_read();
     bool a  = cv_btn(keys, CV_A);
     bool b  = cv_btn(keys, CV_B);
+    bool y  = cv_btn(keys, CV_Y);
     bool up = cv_btn(keys, CV_UP);
     bool dn = cv_btn(keys, CV_DOWN);
     bool lt = cv_btn(keys, CV_LEFT);
@@ -476,12 +518,61 @@ static void handle_input(void) {
             settings_save_file();
             settings_menu_active = false;
         }
-        a_last=a; b_last=b; up_last=up; dn_last=dn; l_last=lt; r_last=rt;
+        a_last=a; b_last=b; up_last=up; dn_last=dn; l_last=lt; r_last=rt; y_last=y;
         return;
     }
 
+    /* Y: toggle favourite for current ROM, or remove from favourites view */
+    if (y && !y_last && selected_index < entry_count) {
+        if (viewing_favourites) {
+            /* Remove selected favourite */
+            favorites_remove_by_index(selected_index);
+            /* Refresh favourites view */
+            const FavoriteGame *fl = favorites_get_list();
+            int fc = favorites_get_count();
+            entry_count = 0;
+            for (int i = 0; i < fc; i++) {
+                strncpy(entries[entry_count].name, fl[i].game_name, 255);
+                entries[entry_count].name[255] = '\0';
+                entries[entry_count].is_dir = 0;
+                entry_count++;
+            }
+            if (selected_index >= entry_count && selected_index > 0)
+                selected_index = entry_count - 1;
+            if (entry_count == 0) {
+                /* No more favourites — go back to root */
+                viewing_favourites = false;
+                scan_directory(ROMS_PATH);
+                strncpy(current_path, ROMS_PATH, MAX_PATH_LEN-1);
+            }
+        } else if (!viewing_recents && !entries[selected_index].is_dir &&
+                   strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
+                   strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
+                   strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0) {
+            /* Toggle favourite for current ROM */
+            const char *folder = get_console_folder(current_path);
+            const char *core   = get_core_for_folder(folder);
+            if (!core) core = get_core_for_extension(entries[selected_index].name);
+            char rom_path[MAX_PATH_LEN];
+            snprintf(rom_path, sizeof(rom_path), "%s/%s", current_path, entries[selected_index].name);
+            char game_name[256];
+            strncpy(game_name, entries[selected_index].name, sizeof(game_name)-1);
+            game_name[sizeof(game_name)-1] = '\0';
+            char *dot = strrchr(game_name, '.');
+            if (dot) *dot = '\0';
+            if (core) favorites_toggle(core, game_name, rom_path);
+        }
+    }
+
     if (a && !a_last && selected_index < entry_count) {
-        if (viewing_recents) {
+        if (viewing_favourites) {
+            /* Launch from favourites list */
+            const FavoriteGame *fl = favorites_get_list();
+            int fc = favorites_get_count();
+            if (selected_index < fc)
+                request_game_launch(fl[selected_index].core_name,
+                                    fl[selected_index].full_path);
+        } else if (viewing_recents) {
             /* Launch from recent games list */
             const RecentGame *rg = recent_games_get_list();
             int rc = recent_games_get_count();
@@ -489,6 +580,24 @@ static void handle_input(void) {
                 request_game_launch(rg[selected_index].core_name,
                                     rg[selected_index].full_path);
             }
+        } else if (strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) == 0) {
+            /* Enter favourites view */
+            const FavoriteGame *fl = favorites_get_list();
+            int fc = favorites_get_count();
+            while (fc > entry_capacity) {
+                entry_capacity = entry_capacity ? entry_capacity*2 : INITIAL_ENTRIES_CAPACITY;
+                entries = realloc(entries, entry_capacity * sizeof(DirEntry));
+                if (!entries) goto input_done;
+            }
+            entry_count = 0;
+            for (int i = 0; i < fc; i++) {
+                strncpy(entries[entry_count].name, fl[i].game_name, 255);
+                entries[entry_count].name[255] = '\0';
+                entries[entry_count].is_dir = 0;
+                entry_count++;
+            }
+            viewing_favourites = true;
+            selected_index = 0; scroll_offset = 0;
         } else if (strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) == 0) {
             /* Enter recents view */
             const RecentGame *rg = recent_games_get_list();
@@ -534,8 +643,9 @@ static void handle_input(void) {
     }
 
     if (b && !b_last) {
-        if (viewing_recents) {
+        if (viewing_recents || viewing_favourites) {
             viewing_recents = false;
+            viewing_favourites = false;
             scan_directory(ROMS_PATH);
             strncpy(current_path, ROMS_PATH, MAX_PATH_LEN-1);
         } else if (strcmp(current_path, ROMS_PATH) != 0) {
@@ -564,7 +674,7 @@ static void handle_input(void) {
     }
 
 input_done:
-    a_last=a; b_last=b; up_last=up; dn_last=dn; l_last=lt; r_last=rt;
+    a_last=a; b_last=b; up_last=up; dn_last=dn; l_last=lt; r_last=rt; y_last=y;
 }
 
 /* ---- libretro API ---- */
@@ -672,11 +782,29 @@ static void render_settings_menu(void) {
 void retro_run(void) {
     handle_input();
 
+    /* Reload banner when view or path changes */
+    static char banner_last_path[MAX_PATH_LEN] = "";
+    static bool banner_last_recents = false;
+    static bool banner_last_favourites = false;
+    if (viewing_recents != banner_last_recents ||
+        viewing_favourites != banner_last_favourites ||
+        strcmp(current_path, banner_last_path) != 0) {
+        load_banner_for_view(current_path, viewing_recents, viewing_favourites);
+        banner_last_recents = viewing_recents;
+        banner_last_favourites = viewing_favourites;
+        strncpy(banner_last_path, current_path, MAX_PATH_LEN - 1);
+        banner_last_path[MAX_PATH_LEN - 1] = '\0';
+    }
+
     if (settings_menu_active) {
         render_settings_menu();
     } else {
-        render_clear_screen(framebuffer);
-        const char *title = viewing_recents ? "RECENT GAMES" :
+        if (banner_is_loaded())
+            banner_render(framebuffer);
+        else
+            render_clear_screen(framebuffer);
+        const char *title = viewing_recents    ? "RECENT GAMES" :
+                            viewing_favourites ? "FAVOURITES" :
                             (strcmp(current_path, ROMS_PATH) == 0)
                             ? "TREEFROGUI: SYSTEMS" : get_basename(current_path);
         render_header(framebuffer, title);
@@ -686,7 +814,29 @@ void retro_run(void) {
             render_menu_item(framebuffer, idx, entries[idx].name, entries[idx].is_dir,
                              (idx == selected_index), scroll_offset, 0);
         }
-        render_legend(framebuffer, LEGEND_X_NONE);
+        /* Compute Y-button legend mode for current selection */
+        int legend_mode = LEGEND_X_NONE;
+        if (viewing_favourites) {
+            legend_mode = LEGEND_X_REMOVE;
+        } else if (!viewing_recents && selected_index < entry_count &&
+                   !entries[selected_index].is_dir &&
+                   strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
+                   strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
+                   strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0) {
+            const char *folder = get_console_folder(current_path);
+            const char *core   = get_core_for_folder(folder);
+            if (!core) core = get_core_for_extension(entries[selected_index].name);
+            if (core) {
+                char game_name[256];
+                strncpy(game_name, entries[selected_index].name, sizeof(game_name)-1);
+                game_name[sizeof(game_name)-1] = '\0';
+                char *dot = strrchr(game_name, '.');
+                if (dot) *dot = '\0';
+                legend_mode = favorites_is_favorited(core, game_name)
+                              ? LEGEND_X_REMOVE : LEGEND_X_FAVOURITE;
+            }
+        }
+        render_legend(framebuffer, legend_mode);
     }
 
     if (video_cb)

@@ -137,7 +137,7 @@ void render_legend(uint16_t *framebuffer, int x_button_mode) {
     }
 
     if (x_button_mode != LEGEND_X_NONE) {
-        const char *xl = (x_button_mode == LEGEND_X_REMOVE) ? " X-REMOVE " : " X-FAV ";
+        const char *xl = (x_button_mode == LEGEND_X_REMOVE) ? " Y-UNFAV " : " Y-FAV ";
         int w = font_measure_text(xl);
         int x = anchor - w;
         render_rounded_rect(framebuffer, x - 4, legend_y, w + 8, pill_h, UI_S(8), COLOR_LEGEND_BG);
