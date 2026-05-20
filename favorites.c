@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define FAVORITES_FILE "/mnt/sda1/frogui/favorites.txt"
+#define FAVORITES_FILE "/mnt/sdcard/frogui/favorites.txt"
 
 // Favorites state
 static FavoriteGame favorites[MAX_FAVORITES];

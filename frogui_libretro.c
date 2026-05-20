@@ -234,6 +234,7 @@ static int selected_index   = 0;
 static int scroll_offset    = 0;
 static uint16_t *framebuffer = NULL;
 static bool shutdown_requested = false;
+static bool viewing_recents = false;
 
 static void dbg(const char *msg) {
     FILE *f = fopen("/tmp/frogui_crash.log", "a");
@@ -362,6 +363,7 @@ static const char* get_console_folder(const char *path) {
 }
 
 #define SETTINGS_ENTRY_NAME ">> Settings"
+#define RECENTS_ENTRY_NAME  ">> Recents"
 
 static void scan_directory(const char *path) {
     DIR *dir = opendir(path);
@@ -399,18 +401,30 @@ static void scan_directory(const char *path) {
                  strcasecmp(entries[i].name, entries[j].name) > 0)) {
                 DirEntry tmp = entries[i]; entries[i] = entries[j]; entries[j] = tmp;
             }
-    /* Append Settings shortcut at root level */
+    /* Append Settings at end, prepend Recents at top */
     if (strcmp(path, ROMS_PATH) == 0) {
-        if (entry_count >= entry_capacity) {
+        int extras = 1 + (recent_games_get_count() > 0 ? 1 : 0);
+        while (entry_count + extras > entry_capacity) {
             entry_capacity = entry_capacity ? entry_capacity*2 : INITIAL_ENTRIES_CAPACITY;
             entries = realloc(entries, entry_capacity * sizeof(DirEntry));
+            if (!entries) goto done;
         }
+        /* Append >> Settings last */
         strncpy(entries[entry_count].name, SETTINGS_ENTRY_NAME, 255);
         entries[entry_count].name[255] = '\0';
-        entries[entry_count].is_dir = 0;  /* treat as file so it appears last */
+        entries[entry_count].is_dir = 0;
         entry_count++;
+        /* Prepend >> Recents first (shift everything right by 1) */
+        if (recent_games_get_count() > 0) {
+            memmove(&entries[1], &entries[0], (entry_count) * sizeof(DirEntry));
+            strncpy(entries[0].name, RECENTS_ENTRY_NAME, 255);
+            entries[0].name[255] = '\0';
+            entries[0].is_dir = 0;
+            entry_count++;
+        }
     }
-
+done:
+    viewing_recents = false;
     selected_index = 0;
     scroll_offset  = 0;
 }
@@ -420,6 +434,15 @@ static void request_game_launch(const char *core_path, const char *rom_path) {
     if (!f) { dbg("failed to write launch file"); return; }
     fprintf(f, "%s\n%s\n", core_path, rom_path);
     fclose(f);
+    /* Record in recent games history */
+    const char *rom_base = strrchr(rom_path, '/');
+    rom_base = rom_base ? rom_base + 1 : rom_path;
+    char game_name[256];
+    strncpy(game_name, rom_base, sizeof(game_name) - 1);
+    game_name[sizeof(game_name) - 1] = '\0';
+    char *dot = strrchr(game_name, '.');
+    if (dot) *dot = '\0';
+    recent_games_add(core_path, game_name, rom_path);
     dbg("launch file written, requesting shutdown");
     if (environ_cb) environ_cb(RETRO_ENVIRONMENT_SHUTDOWN, NULL);
 }
@@ -458,7 +481,33 @@ static void handle_input(void) {
     }
 
     if (a && !a_last && selected_index < entry_count) {
-        if (entries[selected_index].is_dir) {
+        if (viewing_recents) {
+            /* Launch from recent games list */
+            const RecentGame *rg = recent_games_get_list();
+            int rc = recent_games_get_count();
+            if (selected_index < rc) {
+                request_game_launch(rg[selected_index].core_name,
+                                    rg[selected_index].full_path);
+            }
+        } else if (strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) == 0) {
+            /* Enter recents view */
+            const RecentGame *rg = recent_games_get_list();
+            int rc = recent_games_get_count();
+            while (rc > entry_capacity) {
+                entry_capacity = entry_capacity ? entry_capacity*2 : INITIAL_ENTRIES_CAPACITY;
+                entries = realloc(entries, entry_capacity * sizeof(DirEntry));
+                if (!entries) goto input_done;
+            }
+            entry_count = 0;
+            for (int i = 0; i < rc; i++) {
+                strncpy(entries[entry_count].name, rg[i].game_name, 255);
+                entries[entry_count].name[255] = '\0';
+                entries[entry_count].is_dir = 0;
+                entry_count++;
+            }
+            viewing_recents = true;
+            selected_index = 0; scroll_offset = 0;
+        } else if (entries[selected_index].is_dir) {
             char new_path[MAX_PATH_LEN];
             snprintf(new_path, sizeof(new_path), "%s/%s", current_path, entries[selected_index].name);
             strncpy(current_path, new_path, MAX_PATH_LEN-1);
@@ -471,7 +520,6 @@ static void handle_input(void) {
             } else {
                 const char *folder = get_console_folder(current_path);
                 const char *core   = get_core_for_folder(folder);
-                /* Fallback: infer core from file extension if folder name didn't match */
                 if (!core)
                     core = get_core_for_extension(entries[selected_index].name);
                 if (core) {
@@ -485,9 +533,15 @@ static void handle_input(void) {
         }
     }
 
-    if (b && !b_last && strcmp(current_path, ROMS_PATH) != 0) {
-        char *slash = strrchr(current_path, '/');
-        if (slash) { *slash = '\0'; scan_directory(current_path); }
+    if (b && !b_last) {
+        if (viewing_recents) {
+            viewing_recents = false;
+            scan_directory(ROMS_PATH);
+            strncpy(current_path, ROMS_PATH, MAX_PATH_LEN-1);
+        } else if (strcmp(current_path, ROMS_PATH) != 0) {
+            char *slash = strrchr(current_path, '/');
+            if (slash) { *slash = '\0'; scan_directory(current_path); }
+        }
     }
 
     if (up && !up_last && selected_index > 0) {
@@ -509,6 +563,7 @@ static void handle_input(void) {
             scroll_offset = selected_index - VISIBLE_ENTRIES + 1;
     }
 
+input_done:
     a_last=a; b_last=b; up_last=up; dn_last=dn; l_last=lt; r_last=rt;
 }
 
@@ -621,7 +676,8 @@ void retro_run(void) {
         render_settings_menu();
     } else {
         render_clear_screen(framebuffer);
-        const char *title = (strcmp(current_path, ROMS_PATH) == 0)
+        const char *title = viewing_recents ? "RECENT GAMES" :
+                            (strcmp(current_path, ROMS_PATH) == 0)
                             ? "TREEFROGUI: SYSTEMS" : get_basename(current_path);
         render_header(framebuffer, title);
         int visible = min(entry_count - scroll_offset, VISIBLE_ENTRIES);

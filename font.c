@@ -29,7 +29,7 @@ static int load_font_file(const char *font_filename) {
     char font_paths[4][256];
     snprintf(font_paths[0], sizeof(font_paths[0]), "/mnt/sdcard/cubegm/fonts/%s", font_filename);
     snprintf(font_paths[1], sizeof(font_paths[1]), "/mnt/sdcard/frogui/fonts/%s", font_filename);
-    snprintf(font_paths[2], sizeof(font_paths[2]), "/mnt/sda1/frogui/fonts/%s", font_filename);
+    snprintf(font_paths[2], sizeof(font_paths[2]), "/mnt/sdcard/frogui/fonts/%s", font_filename);
     snprintf(font_paths[3], sizeof(font_paths[3]), "fonts/%s", font_filename);
 
     FILE *fp = NULL;

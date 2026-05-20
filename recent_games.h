@@ -2,7 +2,7 @@
 #define RECENT_GAMES_H
 
 #define MAX_RECENT_GAMES 10
-#define HISTORY_FILE "/mnt/sda1/game_history.txt"
+#define HISTORY_FILE "/mnt/sdcard/game_history.txt"
 
 // Recent games structure
 typedef struct {

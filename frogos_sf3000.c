@@ -103,6 +103,25 @@ static const char* get_basename(const char *path) {
     return basename ? basename + 1 : path;
 }
 
+static const char* get_console_folder(const char *path) {
+    size_t roms_len = strlen(ROMS_PATH);
+    if (strncmp(path, ROMS_PATH, roms_len) == 0) {
+        const char *sub = path + roms_len;
+        if (*sub == '/') {
+            sub++;
+        }
+        static char console[64];
+        int i = 0;
+        while (sub[i] != '\0' && sub[i] != '/' && i < 63) {
+            console[i] = sub[i];
+            i++;
+        }
+        console[i] = '\0';
+        return console;
+    }
+    return NULL;
+}
+
 // Scan directory and populate entries list
 static void scan_directory(const char *path) {
     DIR *dir = opendir(path);
@@ -258,7 +277,7 @@ static void handle_input(void) {
             scan_directory(current_path);
         } else {
             // Launch game
-            const char *folder_name = get_basename(current_path);
+            const char *folder_name = get_console_folder(current_path);
             const char *core_path = get_core_path_for_console(folder_name);
 
             if (core_path) {
@@ -324,7 +343,7 @@ static void render_screen(void) {
     for (int i = 0; i < visible_count; i++) {
         int idx = scroll_offset + i;
         int is_selected = (idx == selected_index);
-        render_menu_item(framebuffer, i, entries[idx].name, entries[idx].is_dir,
+        render_menu_item(framebuffer, idx, entries[idx].name, entries[idx].is_dir,
                          is_selected, scroll_offset, 0);
     }
 

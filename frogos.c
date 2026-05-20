@@ -357,6 +357,25 @@ static const char *get_basename(const char *path) {
     return base ? base + 1 : path;
 }
 
+static const char* get_console_folder(const char *path) {
+    size_t roms_len = strlen(ROMS_PATH);
+    if (strncmp(path, ROMS_PATH, roms_len) == 0) {
+        const char *sub = path + roms_len;
+        if (*sub == '/') {
+            sub++;
+        }
+        static char console[64];
+        int i = 0;
+        while (sub[i] != '\0' && sub[i] != '/' && i < 63) {
+            console[i] = sub[i];
+            i++;
+        }
+        console[i] = '\0';
+        return console;
+    }
+    return NULL;
+}
+
 // Auto-launch most recent game if resume on boot is enabled
 static void auto_launch_recent_game(void) {
     // Check if resume on boot is enabled
@@ -1120,7 +1139,7 @@ static void render_menu() {
             strcmp(current_path, "UTILS") != 0 &&
             strcmp(current_path, "HOTKEYS") != 0 &&
             strcmp(current_path, "CREDITS") != 0) {
-            const char *core_name = get_basename(current_path);
+            const char *core_name = get_console_folder(current_path);
             const char *filename_path = strrchr(entries[i].path, '/');
             const char *filename = filename_path ? filename_path + 1 : entries[i].name;
             is_favorited = favorites_is_favorited(core_name, filename);
@@ -1265,7 +1284,7 @@ static void pick_random_game(void) {
         for (int i = 0; i < entry_count; i++) {
             if (!entries[i].is_dir && strcmp(entries[i].name, "..") != 0) {
                 if (file_idx == random_file) {
-                    const char *core_name = get_basename(current_path);
+                    const char *core_name = get_console_folder(current_path);
                     const char *filename_path = strrchr(entries[i].path, '/');
                     const char *filename = filename_path ? filename_path + 1 : entries[i].name;
 
@@ -1539,7 +1558,7 @@ static void handle_input() {
             strcmp(current_path, ROMS_PATH) != 0) {
 
             // Get core name and filename
-            const char *core_name = get_basename(current_path);
+            const char *core_name = get_console_folder(current_path);
             const char *filename_path = strrchr(entry->path, '/');
             const char *filename = filename_path ? filename_path + 1 : entry->name;
 
@@ -1698,7 +1717,7 @@ static void handle_input() {
                 }
             } else {
                 // Extract core name from parent directory
-                core_name = get_basename(current_path);
+                core_name = get_console_folder(current_path);
                 const char *filename_path = strrchr(entry->path, '/');
                 filename = filename_path ? filename_path + 1 : entry->name;
 
