@@ -32,6 +32,7 @@
 #define CORES_PATH   SDCARD_BASE "/cubegm/cores"
 #define ROMS_PATH    SDCARD_BASE "/roms"
 #define LAUNCH_FILE  "/tmp/frogui_launch.txt"
+#define PCSX4ALL_BIN SDCARD_BASE "/cubegm/pcsx4all"
 
 /* Console → core mapping (folder name → libretro .so)
  * Folder names match /mnt/sdcard/roms/ subdirectories (gb300_multicore convention). */
@@ -391,6 +392,11 @@ static void load_banner_for_view(const char *path, bool is_recents, bool is_favo
             snprintf(img, sizeof(img), BANNER_DIR "/%s.%s", name, exts[i]);
             if (access(img, R_OK) == 0) { banner_load(img); return; }
         }
+        /* Fallback: try main.png for any view that has no folder-specific image */
+        for (int i = 0; exts[i]; i++) {
+            snprintf(img, sizeof(img), BANNER_DIR "/main.%s", exts[i]);
+            if (access(img, R_OK) == 0) { banner_load(img); return; }
+        }
     }
     banner_clear();
 }
@@ -488,6 +494,30 @@ static void request_game_launch(const char *core_path, const char *rom_path) {
     if (environ_cb) environ_cb(RETRO_ENVIRONMENT_SHUTDOWN, NULL);
 }
 
+static void request_standalone_launch(const char *bin_path, const char *rom_path) {
+    FILE *f = fopen(LAUNCH_FILE, "w");
+    if (!f) { dbg("failed to write standalone launch file"); return; }
+    fprintf(f, "standalone\n%s\n%s\n", bin_path, rom_path);
+    fclose(f);
+    const char *rom_base = strrchr(rom_path, '/');
+    rom_base = rom_base ? rom_base + 1 : rom_path;
+    char game_name[256];
+    strncpy(game_name, rom_base, sizeof(game_name) - 1);
+    game_name[sizeof(game_name) - 1] = '\0';
+    char *dot = strrchr(game_name, '.');
+    if (dot) *dot = '\0';
+    recent_games_add(bin_path, game_name, rom_path);
+    sync();
+    if (environ_cb) environ_cb(RETRO_ENVIRONMENT_SHUTDOWN, NULL);
+}
+
+static bool is_ps1_folder(const char *folder) {
+    if (!folder) return false;
+    return strcasecmp(folder, "ps1") == 0 ||
+           strcasecmp(folder, "psx") == 0 ||
+           strcasecmp(folder, "PS")  == 0;
+}
+
 static void handle_input(void) {
     static bool a_last=false, b_last=false, up_last=false, dn_last=false;
     static bool l_last=false, r_last=false, y_last=false;
@@ -569,16 +599,25 @@ static void handle_input(void) {
             /* Launch from favourites list */
             const FavoriteGame *fl = favorites_get_list();
             int fc = favorites_get_count();
-            if (selected_index < fc)
-                request_game_launch(fl[selected_index].core_name,
-                                    fl[selected_index].full_path);
+            if (selected_index < fc) {
+                if (strcmp(fl[selected_index].core_name, PCSX4ALL_BIN) == 0)
+                    request_standalone_launch(fl[selected_index].core_name,
+                                              fl[selected_index].full_path);
+                else
+                    request_game_launch(fl[selected_index].core_name,
+                                        fl[selected_index].full_path);
+            }
         } else if (viewing_recents) {
             /* Launch from recent games list */
             const RecentGame *rg = recent_games_get_list();
             int rc = recent_games_get_count();
             if (selected_index < rc) {
-                request_game_launch(rg[selected_index].core_name,
-                                    rg[selected_index].full_path);
+                if (strcmp(rg[selected_index].core_name, PCSX4ALL_BIN) == 0)
+                    request_standalone_launch(rg[selected_index].core_name,
+                                              rg[selected_index].full_path);
+                else
+                    request_game_launch(rg[selected_index].core_name,
+                                        rg[selected_index].full_path);
             }
         } else if (strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) == 0) {
             /* Enter favourites view */
@@ -634,7 +673,10 @@ static void handle_input(void) {
                 if (core) {
                     char rom_path[MAX_PATH_LEN];
                     snprintf(rom_path, sizeof(rom_path), "%s/%s", current_path, entries[selected_index].name);
-                    request_game_launch(core, rom_path);
+                    if (is_ps1_folder(folder) && access(PCSX4ALL_BIN, X_OK) == 0)
+                        request_standalone_launch(PCSX4ALL_BIN, rom_path);
+                    else
+                        request_game_launch(core, rom_path);
                 } else {
                     dbg("no core mapping for this folder or extension");
                 }
@@ -782,18 +824,34 @@ static void render_settings_menu(void) {
 void retro_run(void) {
     handle_input();
 
-    /* Reload banner when view or path changes */
+    /* Reload banner when view, path, or selection changes.
+     * On the main SYSTEMS menu, preview the highlighted folder's banner. */
     static char banner_last_path[MAX_PATH_LEN] = "";
     static bool banner_last_recents = false;
     static bool banner_last_favourites = false;
-    if (viewing_recents != banner_last_recents ||
-        viewing_favourites != banner_last_favourites ||
-        strcmp(current_path, banner_last_path) != 0) {
-        load_banner_for_view(current_path, viewing_recents, viewing_favourites);
-        banner_last_recents = viewing_recents;
-        banner_last_favourites = viewing_favourites;
-        strncpy(banner_last_path, current_path, MAX_PATH_LEN - 1);
-        banner_last_path[MAX_PATH_LEN - 1] = '\0';
+    static int  banner_last_sel = -1;
+    {
+        const char *banner_path = current_path;
+        char sel_path[MAX_PATH_LEN];
+        if (!viewing_recents && !viewing_favourites &&
+            strcmp(current_path, ROMS_PATH) == 0 &&
+            selected_index >= 0 && selected_index < entry_count &&
+            entries[selected_index].is_dir) {
+            snprintf(sel_path, sizeof(sel_path), "%s/%s",
+                     current_path, entries[selected_index].name);
+            banner_path = sel_path;
+        }
+        if (viewing_recents != banner_last_recents ||
+            viewing_favourites != banner_last_favourites ||
+            strcmp(banner_path, banner_last_path) != 0 ||
+            selected_index != banner_last_sel) {
+            load_banner_for_view(banner_path, viewing_recents, viewing_favourites);
+            banner_last_recents = viewing_recents;
+            banner_last_favourites = viewing_favourites;
+            banner_last_sel = selected_index;
+            strncpy(banner_last_path, banner_path, MAX_PATH_LEN - 1);
+            banner_last_path[MAX_PATH_LEN - 1] = '\0';
+        }
     }
 
     if (settings_menu_active) {

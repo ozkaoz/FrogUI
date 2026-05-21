@@ -1,10 +1,11 @@
 #include "banner.h"
 #include "render.h"
+#include <stdlib.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-static uint16_t banner_buf[SCREEN_WIDTH * SCREEN_HEIGHT];
+static uint16_t *banner_buf = NULL;
 static int banner_loaded = 0;
 
 static inline uint16_t rgb_to_565(unsigned char r, unsigned char g, unsigned char b) {
@@ -19,8 +20,15 @@ void banner_load(const char *path) {
         return;
     }
 
-    /* Nearest-neighbor scale to full screen */
     int sw = SCREEN_WIDTH, sh = SCREEN_HEIGHT;
+    if (!banner_buf)
+        banner_buf = malloc(sw * sh * sizeof(uint16_t));
+    if (!banner_buf) {
+        stbi_image_free(img);
+        banner_loaded = 0;
+        return;
+    }
+
     for (int y = 0; y < sh; y++) {
         int sy = (y * h) / sh;
         for (int x = 0; x < sw; x++) {
@@ -39,7 +47,7 @@ void banner_clear(void) {
 }
 
 void banner_render(uint16_t *framebuffer) {
-    if (!banner_loaded || !framebuffer) return;
+    if (!banner_loaded || !banner_buf || !framebuffer) return;
     int n = SCREEN_WIDTH * SCREEN_HEIGHT;
     for (int i = 0; i < n; i++)
         framebuffer[i] = banner_buf[i];
