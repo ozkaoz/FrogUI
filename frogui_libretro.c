@@ -495,10 +495,12 @@ static void request_game_launch(const char *core_path, const char *rom_path) {
 }
 
 static void request_standalone_launch(const char *bin_path, const char *rom_path) {
+    dbg("standalone_launch: start");
     FILE *f = fopen(LAUNCH_FILE, "w");
-    if (!f) { dbg("failed to write standalone launch file"); return; }
+    if (!f) { dbg("standalone_launch: fopen failed"); return; }
     fprintf(f, "standalone\n%s\n%s\n", bin_path, rom_path);
     fclose(f);
+    dbg("standalone_launch: file written");
     const char *rom_base = strrchr(rom_path, '/');
     rom_base = rom_base ? rom_base + 1 : rom_path;
     char game_name[256];
@@ -506,9 +508,11 @@ static void request_standalone_launch(const char *bin_path, const char *rom_path
     game_name[sizeof(game_name) - 1] = '\0';
     char *dot = strrchr(game_name, '.');
     if (dot) *dot = '\0';
+    dbg("standalone_launch: calling recent_games_add");
     recent_games_add(bin_path, game_name, rom_path);
-    sync();
+    dbg("standalone_launch: calling environ_cb SHUTDOWN");
     if (environ_cb) environ_cb(RETRO_ENVIRONMENT_SHUTDOWN, NULL);
+    dbg("standalone_launch: after environ_cb");
 }
 
 static bool is_ps1_folder(const char *folder) {
@@ -673,10 +677,21 @@ static void handle_input(void) {
                 if (core) {
                     char rom_path[MAX_PATH_LEN];
                     snprintf(rom_path, sizeof(rom_path), "%s/%s", current_path, entries[selected_index].name);
-                    if (is_ps1_folder(folder) && access(PCSX4ALL_BIN, X_OK) == 0)
-                        request_standalone_launch(PCSX4ALL_BIN, rom_path);
-                    else
-                        request_game_launch(core, rom_path);
+                    {
+                        int _ps1 = is_ps1_folder(folder);
+                        int _bin = access(PCSX4ALL_BIN, F_OK);
+                        char dbgbuf[512];
+                        snprintf(dbgbuf, sizeof(dbgbuf),
+                                 "A-press: folder=[%s] ps1=%d bin_ok=%d rom=[%s]",
+                                 folder ? folder : "NULL", _ps1, _bin, rom_path);
+                        dbg(dbgbuf);
+                        FILE *_sdlog = fopen("/mnt/sdcard/frogui_apress.log", "a");
+                        if (_sdlog) { fputs(dbgbuf, _sdlog); fputs("\n", _sdlog); fclose(_sdlog); sync(); }
+                        if (_ps1 && _bin == 0)
+                            request_standalone_launch(PCSX4ALL_BIN, rom_path);
+                        else
+                            request_game_launch(core, rom_path);
+                    }
                 } else {
                     dbg("no core mapping for this folder or extension");
                 }
