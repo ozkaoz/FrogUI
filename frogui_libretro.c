@@ -27,6 +27,7 @@
 #include "favorites.h"
 #include "settings.h"
 #include "banner.h"
+#include "backlight.h"
 
 #define SDCARD_BASE  "/mnt/sdcard"
 #define CORES_PATH   SDCARD_BASE "/cubegm/cores"
@@ -288,10 +289,12 @@ static const char *font_names[] = {"GamePocket", "Monogram"};
 #define FONT_COUNT 2
 
 static bool settings_menu_active = false;
-static int settings_menu_idx = 0;       /* which row: 0=theme, 1=font */
+static int settings_menu_idx = 0;       /* which row: 0=theme, 1=font, 2=brightness */
 static int settings_theme_idx = 0;
 static int settings_font_idx = 0;
-#define SETTINGS_ROW_COUNT 2
+static int settings_brightness = 75;    /* 0..100, step 5 */
+#define SETTINGS_BRIGHTNESS_STEP 5
+#define SETTINGS_ROW_COUNT 3
 
 static void mkdir_p(const char *path) {
     char cmd[300];
@@ -303,8 +306,11 @@ static void settings_apply(void) {
     extern const int theme_count;
     if (settings_theme_idx < 0 || settings_theme_idx >= theme_count) settings_theme_idx = 0;
     if (settings_font_idx < 0 || settings_font_idx >= FONT_COUNT) settings_font_idx = 0;
+    if (settings_brightness < 0)   settings_brightness = 0;
+    if (settings_brightness > 100) settings_brightness = 100;
     theme_apply(settings_theme_idx);
     font_load_from_settings(font_names[settings_font_idx]);
+    cube_set_backlight(settings_brightness);
 }
 
 static void settings_load_file(void) {
@@ -326,6 +332,8 @@ static void settings_load_file(void) {
         } else if (strcmp(line, "font") == 0) {
             for (int i = 0; i < FONT_COUNT; i++)
                 if (strcmp(font_names[i], val) == 0) { settings_font_idx = i; break; }
+        } else if (strcmp(line, "brightness") == 0) {
+            settings_brightness = atoi(val);
         }
     }
     fclose(f);
@@ -338,6 +346,9 @@ static void settings_save_file(void) {
     if (!f) { dbg("settings save: fopen failed"); return; }
     fprintf(f, "theme=%s\n", themes[settings_theme_idx].name);
     fprintf(f, "font=%s\n", font_names[settings_font_idx]);
+    fprintf(f, "brightness=%d\n", settings_brightness);
+    fflush(f);
+    fsync(fileno(f));
     fclose(f);
 }
 
@@ -543,8 +554,12 @@ static void handle_input(void) {
             int delta = (rt && !r_last) ? 1 : -1;
             if (settings_menu_idx == 0) {
                 settings_theme_idx = (settings_theme_idx + delta + theme_count) % theme_count;
-            } else {
+            } else if (settings_menu_idx == 1) {
                 settings_font_idx = (settings_font_idx + delta + FONT_COUNT) % FONT_COUNT;
+            } else {
+                settings_brightness += delta * SETTINGS_BRIGHTNESS_STEP;
+                if (settings_brightness < 0)   settings_brightness = 0;
+                if (settings_brightness > 100) settings_brightness = 100;
             }
             settings_apply();
         }
@@ -832,6 +847,14 @@ static void render_settings_menu(void) {
         render_text_pillbox(framebuffer, PADDING, y1, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y1, line, COLOR_TEXT);
+    }
+    /* Brightness row */
+    snprintf(line, sizeof(line), "Brightness: < %d%% >", settings_brightness);
+    int y2 = y1 + ITEM_HEIGHT;
+    if (settings_menu_idx == 2) {
+        render_text_pillbox(framebuffer, PADDING, y2, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    } else {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y2, line, COLOR_TEXT);
     }
     render_legend(framebuffer, LEGEND_X_NONE);
 }
