@@ -886,13 +886,17 @@ void retro_run(void) {
     {
         const char *banner_path = current_path;
         char sel_path[MAX_PATH_LEN];
-        if (!viewing_recents && !viewing_favourites &&
-            strcmp(current_path, ROMS_PATH) == 0 &&
-            selected_index >= 0 && selected_index < entry_count &&
-            entries[selected_index].is_dir) {
-            snprintf(sel_path, sizeof(sel_path), "%s/%s",
-                     current_path, entries[selected_index].name);
-            banner_path = sel_path;
+        if (settings_menu_active) {
+            banner_path = "settings";
+        } else if (!viewing_recents && !viewing_favourites &&
+                   selected_index >= 0 && selected_index < entry_count) {
+            if (strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) == 0) {
+                banner_path = "settings";
+            } else if (entries[selected_index].is_dir && strcmp(current_path, ROMS_PATH) == 0) {
+                snprintf(sel_path, sizeof(sel_path), "%s/%s",
+                         current_path, entries[selected_index].name);
+                banner_path = sel_path;
+            }
         }
         if (viewing_recents != banner_last_recents ||
             viewing_favourites != banner_last_favourites ||
