@@ -1,6 +1,7 @@
 /*
  * input.c - Cubevol shared memory input for SF3000
- * Reads button state from /tmp/joy_key shared memory
+ * Reads button state from /tmp/joy_key shared memory.
+ * Remap table loaded from KEYMAP_FILE; falls back to hardcoded defaults.
  */
 
 #include <stdio.h>
@@ -9,122 +10,126 @@
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
-#include <unistd.h>
 #include "input.h"
 
-// Pointer to cubevol shared memory (4 bytes, low 16 bits = button state)
 static volatile uint32_t *cubevol_keys = NULL;
 static int shmid = -1;
 
-// Button state tracking
 static uint32_t current_state = 0;
+static uint32_t prev_state    = 0;
+
+/* Default raw bit for each logical button (-1 = unmapped). */
+static const int default_bits[FROG_BTN_COUNT] = {
+    [FROG_BTN_UP]     = 4,
+    [FROG_BTN_DOWN]   = 6,
+    [FROG_BTN_LEFT]   = 7,
+    [FROG_BTN_RIGHT]  = 5,
+    [FROG_BTN_A]      = 13,
+    [FROG_BTN_B]      = 14,
+    [FROG_BTN_X]      = 12,
+    [FROG_BTN_Y]      = 15,
+    [FROG_BTN_L1]     = 10,
+    [FROG_BTN_R1]     = 11,
+    [FROG_BTN_L2]     = -1,
+    [FROG_BTN_R2]     = -1,
+    [FROG_BTN_START]  = 3,
+    [FROG_BTN_SELECT] = 0,
+};
+
+static int remap_bits[FROG_BTN_COUNT];
+
+static const char *btn_names[FROG_BTN_COUNT] = {
+    "UP","DOWN","LEFT","RIGHT","A","B","X","Y","L1","R1","L2","R2","START","SELECT"
+};
+
+const char *input_btn_name(FrogButton btn) {
+    if (btn < 0 || btn >= FROG_BTN_COUNT) return "?";
+    return btn_names[btn];
+}
+
+void input_reset_defaults(void) {
+    for (int i = 0; i < FROG_BTN_COUNT; i++)
+        remap_bits[i] = default_bits[i];
+}
 
 int input_init(void) {
-    FILE *log = fopen("/mnt/sdcard/frogui_debug.log", "a");
-    if (log) fprintf(log, "input_init: Connecting to cubevol...\n");
-
-    // Get shared memory key for /tmp/joy_key
+    input_reset_defaults();
     key_t key = ftok("/tmp/joy_key", 'a');
-    if (key == (key_t)-1) {
-        if (log) {
-            fprintf(log, "input_init: ERROR - ftok failed\n");
-            fclose(log);
-        }
-        return -1;
-    }
-
-    // Get shared memory segment (4 bytes)
+    if (key == (key_t)-1) return -1;
     shmid = shmget(key, 4, 0666);
-    if (shmid < 0) {
-        if (log) {
-            fprintf(log, "input_init: ERROR - shmget failed (cubevol not running?)\n");
-            fclose(log);
-        }
-        return -1;
-    }
-
-    // Attach to shared memory
+    if (shmid < 0) return -1;
     cubevol_keys = (volatile uint32_t *)shmat(shmid, NULL, 0);
-    if (cubevol_keys == (void *)-1) {
-        if (log) {
-            fprintf(log, "input_init: ERROR - shmat failed\n");
-            fclose(log);
-        }
-        cubevol_keys = NULL;
-        return -1;
-    }
-
-    if (log) {
-        fprintf(log, "input_init: Connected to cubevol (shmid=%d, ptr=%p)\n", shmid, cubevol_keys);
-        fclose(log);
-    }
-
-    // Read initial state
-    current_state = *cubevol_keys & 0xFFFF;
+    if (cubevol_keys == (void *)-1) { cubevol_keys = NULL; return -1; }
+    current_state = 0;
+    prev_state    = 0;
     return 0;
 }
 
 void input_deinit(void) {
-    if (cubevol_keys != NULL) {
-        shmdt((void *)cubevol_keys);
-        cubevol_keys = NULL;
-    }
+    if (cubevol_keys) { shmdt((void *)cubevol_keys); cubevol_keys = NULL; }
     shmid = -1;
 }
 
-// SF3000 button bit positions (from picoarch)
-#define BTN_UP_BIT     4
-#define BTN_DOWN_BIT   6
-#define BTN_LEFT_BIT   7
-#define BTN_RIGHT_BIT  5
-#define BTN_A_BIT     13
-#define BTN_B_BIT     14
-#define BTN_X_BIT     12
-#define BTN_Y_BIT     15
-#define BTN_L_BIT     10
-#define BTN_R_BIT     11
-#define BTN_SELECT_BIT 0
-#define BTN_START_BIT  3
-
-// Process all pending input events
 void input_update(void) {
-    if (cubevol_keys == NULL) {
-        return;
-    }
-
-    // Read current button state from cubevol (low 16 bits only)
-    uint32_t raw_state = *cubevol_keys & 0xFFFF;
-
-    // Convert cubevol bit format to our button bitmask
+    if (!cubevol_keys) return;
+    uint32_t raw = *cubevol_keys & 0xFFFF;
+    prev_state = current_state;
     current_state = 0;
-
-    if (raw_state & (1 << BTN_UP_BIT))     current_state |= (1 << FROG_BTN_UP);
-    if (raw_state & (1 << BTN_DOWN_BIT))   current_state |= (1 << FROG_BTN_DOWN);
-    if (raw_state & (1 << BTN_LEFT_BIT))   current_state |= (1 << FROG_BTN_LEFT);
-    if (raw_state & (1 << BTN_RIGHT_BIT))  current_state |= (1 << FROG_BTN_RIGHT);
-    if (raw_state & (1 << BTN_A_BIT))      current_state |= (1 << FROG_BTN_A);
-    if (raw_state & (1 << BTN_B_BIT))      current_state |= (1 << FROG_BTN_B);
-    if (raw_state & (1 << BTN_X_BIT))      current_state |= (1 << FROG_BTN_X);
-    if (raw_state & (1 << BTN_Y_BIT))      current_state |= (1 << FROG_BTN_Y);
-    if (raw_state & (1 << BTN_L_BIT))      current_state |= (1 << FROG_BTN_L);
-    if (raw_state & (1 << BTN_R_BIT))      current_state |= (1 << FROG_BTN_R);
-    if (raw_state & (1 << BTN_SELECT_BIT)) current_state |= (1 << FROG_BTN_SELECT);
-    if (raw_state & (1 << BTN_START_BIT))  current_state |= (1 << FROG_BTN_START);
+    for (int i = 0; i < FROG_BTN_COUNT; i++) {
+        int bit = remap_bits[i];
+        if (bit >= 0 && bit <= 15 && (raw >> bit) & 1)
+            current_state |= (1u << i);
+    }
 }
 
-// Check if button is currently pressed
 bool input_is_pressed(FrogButton btn) {
-    return (current_state & (1 << btn)) != 0;
+    return (current_state >> btn) & 1;
 }
 
-// Check if button was just pressed this frame
 bool input_was_pressed(FrogButton btn) {
-    // For simplicity, this just checks current state
-    // A proper implementation would track previous state
-    return input_is_pressed(btn);
+    return ((current_state >> btn) & 1) && !((prev_state >> btn) & 1);
 }
 
-// Get full button state as bitmask
-uint32_t input_get_state(void) {
-    return current_state;
+uint32_t input_get_raw_state(void) {
+    return cubevol_keys ? (*cubevol_keys & 0xFFFF) : 0;
+}
+
+void input_set_raw_bit(FrogButton btn, int raw_bit) {
+    if (btn >= 0 && btn < FROG_BTN_COUNT)
+        remap_bits[btn] = raw_bit;
+}
+
+int input_get_raw_bit(FrogButton btn) {
+    if (btn < 0 || btn >= FROG_BTN_COUNT) return -1;
+    return remap_bits[btn];
+}
+
+int input_load_remap(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    char line[64];
+    while (fgets(line, sizeof(line), f)) {
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        int val = atoi(eq + 1);
+        for (int i = 0; i < FROG_BTN_COUNT; i++) {
+            if (strcmp(line, btn_names[i]) == 0) {
+                remap_bits[i] = val;
+                break;
+            }
+        }
+    }
+    fclose(f);
+    return 0;
+}
+
+int input_save_remap(const char *path) {
+    FILE *f = fopen(path, "w");
+    if (!f) return -1;
+    for (int i = 0; i < FROG_BTN_COUNT; i++)
+        fprintf(f, "%s=%d\n", btn_names[i], remap_bits[i]);
+    fflush(f);
+    fclose(f);
+    return 0;
 }

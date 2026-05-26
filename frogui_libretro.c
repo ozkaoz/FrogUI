@@ -13,8 +13,6 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/ipc.h>
-#include <sys/shm.h>
 #include <unistd.h>
 #include <dirent.h>
 #include <stdbool.h>
@@ -28,6 +26,7 @@
 #include "settings.h"
 #include "banner.h"
 #include "backlight.h"
+#include "input.h"
 
 #define SDCARD_BASE  "/mnt/sdcard"
 #define CORES_PATH   SDCARD_BASE "/cubegm/cores"
@@ -246,38 +245,7 @@ static void dbg(const char *msg) {
     fprintf(stderr, "FROGUI_DBG: %s\n", msg);
 }
 
-/* --- Cubevol direct input (picoarch input_state_cb returns nothing on SF3000) --- */
-#define CV_UP     4
-#define CV_DOWN   6
-#define CV_LEFT   7
-#define CV_RIGHT  5
-#define CV_A     13
-#define CV_B     14
-#define CV_X     12
-#define CV_Y     15
-#define CV_L     10
-#define CV_R     11
-#define CV_SEL    0
-#define CV_START  3
-
-static volatile uint32_t *cv_keys = NULL;
-static int cv_shmid = -1;
-
-static void cv_init(void) {
-    key_t key = ftok("/tmp/joy_key", 'a');
-    if (key == (key_t)-1) { dbg("cv_init: ftok failed"); return; }
-    cv_shmid = shmget(key, 4, 0666);
-    if (cv_shmid < 0) { dbg("cv_init: shmget failed"); return; }
-    cv_keys = (volatile uint32_t *)shmat(cv_shmid, NULL, 0);
-    if (cv_keys == (void *)-1) { cv_keys = NULL; dbg("cv_init: shmat failed"); return; }
-    dbg("cv_init: OK");
-}
-
-static uint32_t cv_read(void) {
-    return cv_keys ? (*cv_keys & 0xFFFF) : 0;
-}
-
-static bool cv_btn(uint32_t state, int bit) { return (state >> bit) & 1; }
+/* --- Input (via input.c / cubevol shmem) --- */
 
 /* --- Settings ---
  * Stored at /mnt/sdcard/frogui/settings.txt, key=value format.
@@ -289,12 +257,16 @@ static const char *font_names[] = {"GamePocket", "Monogram"};
 #define FONT_COUNT 2
 
 static bool settings_menu_active = false;
-static int settings_menu_idx = 0;       /* which row: 0=theme, 1=font, 2=brightness */
+static int settings_menu_idx = 0;       /* which row: 0=theme, 1=font, 2=brightness, 3=remap */
 static int settings_theme_idx = 0;
 static int settings_font_idx = 0;
 static int settings_brightness = 75;    /* 0..100, step 5 */
 #define SETTINGS_BRIGHTNESS_STEP 5
-#define SETTINGS_ROW_COUNT 3
+#define SETTINGS_ROW_COUNT 4
+
+static bool remap_wizard_active = false;
+static int  remap_step = 0;
+static uint32_t remap_prev_raw = 0;
 
 static void mkdir_p(const char *path) {
     char cmd[300];
@@ -458,12 +430,12 @@ static void scan_directory(const char *path) {
             entries = realloc(entries, entry_capacity * sizeof(DirEntry));
             if (!entries) goto done;
         }
-        /* Append >> Settings last */
-        strncpy(entries[entry_count].name, SETTINGS_ENTRY_NAME, 255);
-        entries[entry_count].name[255] = '\0';
-        entries[entry_count].is_dir = 0;
+        /* Prepend Settings, then Favourites, then Recents (Recents ends up at index 0) */
+        memmove(&entries[1], &entries[0], entry_count * sizeof(DirEntry));
+        strncpy(entries[0].name, SETTINGS_ENTRY_NAME, 255);
+        entries[0].name[255] = '\0';
+        entries[0].is_dir = 0;
         entry_count++;
-        /* Prepend >> Favourites then >> Recents (Recents ends up at index 0) */
         if (has_favs) {
             memmove(&entries[1], &entries[0], entry_count * sizeof(DirEntry));
             strncpy(entries[0].name, FAVOURITES_ENTRY_NAME, 255);
@@ -534,45 +506,67 @@ static bool is_ps1_folder(const char *folder) {
 }
 
 static void handle_input(void) {
-    static bool a_last=false, b_last=false, up_last=false, dn_last=false;
-    static bool l_last=false, r_last=false, y_last=false;
+    input_update();
 
-    uint32_t keys = cv_read();
-    bool a  = cv_btn(keys, CV_A);
-    bool b  = cv_btn(keys, CV_B);
-    bool y  = cv_btn(keys, CV_Y);
-    bool up = cv_btn(keys, CV_UP);
-    bool dn = cv_btn(keys, CV_DOWN);
-    bool lt = cv_btn(keys, CV_LEFT);
-    bool rt = cv_btn(keys, CV_RIGHT);
+    /* Remap wizard: detect raw rising edge on any bit; B = skip this step */
+    if (remap_wizard_active) {
+        uint32_t raw   = input_get_raw_state();
+        uint32_t risen = raw & ~remap_prev_raw;
+        remap_prev_raw = raw;
+        bool skip = (risen >> input_get_raw_bit(FROG_BTN_B)) & 1;
+        int  pressed_bit = -1;
+        if (!skip) {
+            for (int bit = 0; bit < 16; bit++) {
+                if ((risen >> bit) & 1) { pressed_bit = bit; break; }
+            }
+        }
+        if (skip || pressed_bit >= 0) {
+            if (!skip) input_set_raw_bit((FrogButton)remap_step, pressed_bit);
+            remap_step++;
+            if (remap_step >= FROG_BTN_COUNT) {
+                remap_wizard_active = false;
+                input_save_remap(KEYMAP_FILE);
+            }
+        }
+        return;
+    }
 
     if (settings_menu_active) {
         extern const int theme_count;
-        if (up && !up_last) settings_menu_idx = (settings_menu_idx - 1 + SETTINGS_ROW_COUNT) % SETTINGS_ROW_COUNT;
-        if (dn && !dn_last) settings_menu_idx = (settings_menu_idx + 1) % SETTINGS_ROW_COUNT;
-        if ((lt && !l_last) || (rt && !r_last)) {
-            int delta = (rt && !r_last) ? 1 : -1;
+        if (input_was_pressed(FROG_BTN_UP))
+            settings_menu_idx = (settings_menu_idx - 1 + SETTINGS_ROW_COUNT) % SETTINGS_ROW_COUNT;
+        if (input_was_pressed(FROG_BTN_DOWN))
+            settings_menu_idx = (settings_menu_idx + 1) % SETTINGS_ROW_COUNT;
+        if (input_was_pressed(FROG_BTN_LEFT) || input_was_pressed(FROG_BTN_RIGHT)) {
+            int delta = input_was_pressed(FROG_BTN_RIGHT) ? 1 : -1;
             if (settings_menu_idx == 0) {
                 settings_theme_idx = (settings_theme_idx + delta + theme_count) % theme_count;
             } else if (settings_menu_idx == 1) {
                 settings_font_idx = (settings_font_idx + delta + FONT_COUNT) % FONT_COUNT;
-            } else {
+            } else if (settings_menu_idx == 2) {
                 settings_brightness += delta * SETTINGS_BRIGHTNESS_STEP;
                 if (settings_brightness < 0)   settings_brightness = 0;
                 if (settings_brightness > 100) settings_brightness = 100;
             }
             settings_apply();
         }
-        if ((a && !a_last) || (b && !b_last)) {
+        if (input_was_pressed(FROG_BTN_A) && settings_menu_idx == 3) {
+            remap_step = 0;
+            remap_prev_raw = input_get_raw_state();
+            remap_wizard_active = true;
+            settings_menu_active = false;
+            return;
+        }
+        if ((input_was_pressed(FROG_BTN_A) && settings_menu_idx != 3) ||
+             input_was_pressed(FROG_BTN_B)) {
             settings_save_file();
             settings_menu_active = false;
         }
-        a_last=a; b_last=b; up_last=up; dn_last=dn; l_last=lt; r_last=rt; y_last=y;
         return;
     }
 
     /* Y: toggle favourite for current ROM, or remove from favourites view */
-    if (y && !y_last && selected_index < entry_count) {
+    if (input_was_pressed(FROG_BTN_Y) && selected_index < entry_count) {
         if (viewing_favourites) {
             /* Remove selected favourite */
             favorites_remove_by_index(selected_index);
@@ -613,7 +607,7 @@ static void handle_input(void) {
         }
     }
 
-    if (a && !a_last && selected_index < entry_count) {
+    if (input_was_pressed(FROG_BTN_A) && selected_index < entry_count) {
         if (viewing_favourites) {
             /* Launch from favourites list */
             const FavoriteGame *fl = favorites_get_list();
@@ -714,7 +708,7 @@ static void handle_input(void) {
         }
     }
 
-    if (b && !b_last) {
+    if (input_was_pressed(FROG_BTN_B)) {
         if (viewing_recents || viewing_favourites) {
             viewing_recents = false;
             viewing_favourites = false;
@@ -726,27 +720,26 @@ static void handle_input(void) {
         }
     }
 
-    if (up && !up_last && selected_index > 0) {
+    if (input_was_pressed(FROG_BTN_UP) && selected_index > 0) {
         selected_index--;
         if (selected_index < scroll_offset) scroll_offset = selected_index;
     }
-    if (dn && !dn_last && selected_index < entry_count-1) {
+    if (input_was_pressed(FROG_BTN_DOWN) && selected_index < entry_count-1) {
         selected_index++;
         if (selected_index >= scroll_offset + VISIBLE_ENTRIES)
             scroll_offset = selected_index - VISIBLE_ENTRIES + 1;
     }
-    if (lt && !l_last) {
+    if (input_was_pressed(FROG_BTN_LEFT)) {
         selected_index = (selected_index >= VISIBLE_ENTRIES) ? selected_index - VISIBLE_ENTRIES : 0;
         if (selected_index < scroll_offset) scroll_offset = selected_index;
     }
-    if (rt && !r_last) {
+    if (input_was_pressed(FROG_BTN_RIGHT)) {
         selected_index = (selected_index + VISIBLE_ENTRIES < entry_count) ? selected_index + VISIBLE_ENTRIES : entry_count - 1;
         if (selected_index >= scroll_offset + VISIBLE_ENTRIES)
             scroll_offset = selected_index - VISIBLE_ENTRIES + 1;
     }
 
-input_done:
-    a_last=a; b_last=b; up_last=up; dn_last=dn; l_last=lt; r_last=rt; y_last=y;
+input_done:;
 }
 
 /* ---- libretro API ---- */
@@ -790,7 +783,8 @@ void retro_set_input_state(retro_input_state_t cb)              { input_state_cb
 
 void retro_init(void) {
     dbg("retro_init start");
-    cv_init();
+    input_init();
+    input_load_remap(KEYMAP_FILE);
     font_init();
     dbg("font_init done");
     theme_init();
@@ -857,7 +851,27 @@ static void render_settings_menu(void) {
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y2, line, COLOR_TEXT);
     }
+    /* Button Mapping row */
+    int y3 = y2 + ITEM_HEIGHT;
+    if (settings_menu_idx == 3) {
+        render_text_pillbox(framebuffer, PADDING, y3, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    } else {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y3, "Button Mapping", COLOR_TEXT);
+    }
     render_legend(framebuffer, LEGEND_X_NONE);
+}
+
+static void render_remap_wizard(void) {
+    render_clear_screen(framebuffer);
+    render_header(framebuffer, "BUTTON MAPPING");
+
+    char line[128];
+    int y = START_Y;
+    snprintf(line, sizeof(line), "Press  %s  (%d / %d)", input_btn_name((FrogButton)remap_step), remap_step + 1, FROG_BTN_COUNT);
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, line, COLOR_TEXT);
+
+    y += ITEM_HEIGHT;
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, "[B] = skip / keep default", COLOR_TEXT);
 }
 
 void retro_run(void) {
@@ -893,7 +907,9 @@ void retro_run(void) {
         }
     }
 
-    if (settings_menu_active) {
+    if (remap_wizard_active) {
+        render_remap_wizard();
+    } else if (settings_menu_active) {
         render_settings_menu();
     } else {
         if (banner_is_loaded())

@@ -8,7 +8,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// Button enumeration matching SF3000 layout
+#define KEYMAP_FILE "/mnt/sdcard/frogui/keymap.txt"
+
 typedef enum {
     FROG_BTN_UP = 0,
     FROG_BTN_DOWN,
@@ -18,31 +19,39 @@ typedef enum {
     FROG_BTN_B,
     FROG_BTN_X,
     FROG_BTN_Y,
-    FROG_BTN_L,
-    FROG_BTN_R,
+    FROG_BTN_L1,
+    FROG_BTN_R1,
     FROG_BTN_L2,
     FROG_BTN_R2,
-    FROG_BTN_SELECT,
     FROG_BTN_START,
+    FROG_BTN_SELECT,
     FROG_BTN_COUNT
 } FrogButton;
 
-// Initialize input system (cubevol shared memory)
-int input_init(void);
+/* Human-readable name for each button (used in remap wizard). */
+const char *input_btn_name(FrogButton btn);
 
-// Clean up input resources
+/* Initialize input system (cubevol shared memory). */
+int  input_init(void);
 void input_deinit(void);
 
-// Process all pending input events
+/* Call once per frame before reading button state. */
 void input_update(void);
 
-// Check if button is currently pressed
+/* Current state (updated by input_update). */
 bool input_is_pressed(FrogButton btn);
+bool input_was_pressed(FrogButton btn);   /* true only on rising edge this frame */
 
-// Check if button was just pressed this frame
-bool input_was_pressed(FrogButton btn);
+/* Raw 16-bit cubevol value (needed by remap wizard). */
+uint32_t input_get_raw_state(void);
 
-// Get full button state as bitmask
-uint32_t input_get_state(void);
+/* Remap table: logical button -> raw bit index (0-15), or -1 = unmapped. */
+void input_reset_defaults(void);
+void input_set_raw_bit(FrogButton btn, int raw_bit);
+int  input_get_raw_bit(FrogButton btn);
 
-#endif // INPUT_H
+/* Persist/restore keymap file.  Returns 0 on success, -1 on error/not-found. */
+int  input_load_remap(const char *path);
+int  input_save_remap(const char *path);
+
+#endif /* INPUT_H */
