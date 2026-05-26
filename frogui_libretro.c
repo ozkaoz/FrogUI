@@ -797,6 +797,7 @@ void retro_init(void) {
     dbg("theme_init done");
     settings_load_file();
     settings_apply();
+    fb1_set_visible(1);   /* ensure OSD overlay (battery) is shown */
     dbg("settings loaded");
     recent_games_init();
     dbg("recent_games_init done");
