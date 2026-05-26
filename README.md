@@ -35,6 +35,25 @@ FrogUI is a libretro-based launcher that provides a simple, clean interface for 
 - FrogUI automatically determines which core to use based on the folder name
 - The game boots immediately with the appropriate emulator
 
+## Hotkeys
+
+### In the launcher (FrogUI)
+
+| Button | Action |
+|--------|--------|
+| D-Pad | Navigate |
+| A | Enter folder / Launch game |
+| B | Back |
+| Y | Add / remove favourite |
+
+### In-game (SF3000)
+
+| Combo | Action |
+|-------|--------|
+| SELECT + START | Open emulator menu |
+| SELECT + R | Quick save (slot 0) |
+| SELECT + L | Quick load (slot 0) |
+
 ## SF3000 Architecture
 
 How the whole stack fits together on SF3000:
