@@ -257,12 +257,17 @@ static const char *font_names[] = {"GamePocket", "Monogram"};
 #define FONT_COUNT 2
 
 static bool settings_menu_active = false;
-static int settings_menu_idx = 0;       /* which row: 0=theme, 1=font, 2=brightness, 3=remap */
+static int settings_menu_idx = 0;       /* row: 0=theme, 1=font, 2=brightness, 3=filter, 4=remap */
 static int settings_theme_idx = 0;
 static int settings_font_idx = 0;
 static int settings_brightness = 75;    /* 0..100, step 5 */
+static int settings_filter_idx = 0;     /* 0=nearest, 1=bilinear */
+static int settings_filter_idx_on_enter = 0;  /* snapshot for restart-on-change */
+static const char *filter_names[] = {"nearest", "bilinear"};
+#define FILTER_COUNT 2
 #define SETTINGS_BRIGHTNESS_STEP 5
-#define SETTINGS_ROW_COUNT 4
+#define SETTINGS_ROW_COUNT 5
+#define SETTINGS_ROW_REMAP 4
 
 static bool remap_wizard_active = false;
 static int  remap_step = 0;
@@ -306,6 +311,9 @@ static void settings_load_file(void) {
                 if (strcmp(font_names[i], val) == 0) { settings_font_idx = i; break; }
         } else if (strcmp(line, "brightness") == 0) {
             settings_brightness = atoi(val);
+        } else if (strcmp(line, "filter") == 0) {
+            for (int i = 0; i < FILTER_COUNT; i++)
+                if (strcmp(filter_names[i], val) == 0) { settings_filter_idx = i; break; }
         }
     }
     fclose(f);
@@ -319,6 +327,7 @@ static void settings_save_file(void) {
     fprintf(f, "theme=%s\n", themes[settings_theme_idx].name);
     fprintf(f, "font=%s\n", font_names[settings_font_idx]);
     fprintf(f, "brightness=%d\n", settings_brightness);
+    fprintf(f, "filter=%s\n", filter_names[settings_filter_idx]);
     fflush(f);
     fsync(fileno(f));
     fclose(f);
@@ -547,17 +556,19 @@ static void handle_input(void) {
                 settings_brightness += delta * SETTINGS_BRIGHTNESS_STEP;
                 if (settings_brightness < 0)   settings_brightness = 0;
                 if (settings_brightness > 100) settings_brightness = 100;
+            } else if (settings_menu_idx == 3) {
+                settings_filter_idx = (settings_filter_idx + delta + FILTER_COUNT) % FILTER_COUNT;
             }
             settings_apply();
         }
-        if (input_was_pressed(FROG_BTN_A) && settings_menu_idx == 3) {
+        if (input_was_pressed(FROG_BTN_A) && settings_menu_idx == SETTINGS_ROW_REMAP) {
             remap_step = 0;
             remap_prev_raw = input_get_raw_state();
             remap_wizard_active = true;
             settings_menu_active = false;
             return;
         }
-        if ((input_was_pressed(FROG_BTN_A) && settings_menu_idx != 3) ||
+        if ((input_was_pressed(FROG_BTN_A) && settings_menu_idx != SETTINGS_ROW_REMAP) ||
              input_was_pressed(FROG_BTN_B)) {
             settings_save_file();
             settings_menu_active = false;
@@ -678,6 +689,7 @@ static void handle_input(void) {
             if (strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) == 0) {
                 settings_menu_active = true;
                 settings_menu_idx = 0;
+                settings_filter_idx_on_enter = settings_filter_idx;
             } else {
                 const char *folder = get_console_folder(current_path);
                 const char *core   = get_core_for_folder(folder);
@@ -686,21 +698,10 @@ static void handle_input(void) {
                 if (core) {
                     char rom_path[MAX_PATH_LEN];
                     snprintf(rom_path, sizeof(rom_path), "%s/%s", current_path, entries[selected_index].name);
-                    {
-                        int _ps1 = is_ps1_folder(folder);
-                        int _bin = access(PCSX4ALL_BIN, F_OK);
-                        char dbgbuf[512];
-                        snprintf(dbgbuf, sizeof(dbgbuf),
-                                 "A-press: folder=[%s] ps1=%d bin_ok=%d rom=[%s]",
-                                 folder ? folder : "NULL", _ps1, _bin, rom_path);
-                        dbg(dbgbuf);
-                        FILE *_sdlog = fopen("/mnt/sdcard/frogui_apress.log", "a");
-                        if (_sdlog) { fputs(dbgbuf, _sdlog); fputs("\n", _sdlog); fclose(_sdlog); sync(); }
-                        if (_ps1 && _bin == 0)
-                            request_standalone_launch(PCSX4ALL_BIN, rom_path);
-                        else
-                            request_game_launch(core, rom_path);
-                    }
+                    if (is_ps1_folder(folder) && access(PCSX4ALL_BIN, F_OK) == 0)
+                        request_standalone_launch(PCSX4ALL_BIN, rom_path);
+                    else
+                        request_game_launch(core, rom_path);
                 } else {
                     dbg("no core mapping for this folder or extension");
                 }
@@ -851,12 +852,20 @@ static void render_settings_menu(void) {
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y2, line, COLOR_TEXT);
     }
-    /* Button Mapping row */
+    /* Filter row */
+    snprintf(line, sizeof(line), "Filter: < %s >", filter_names[settings_filter_idx]);
     int y3 = y2 + ITEM_HEIGHT;
     if (settings_menu_idx == 3) {
-        render_text_pillbox(framebuffer, PADDING, y3, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+        render_text_pillbox(framebuffer, PADDING, y3, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y3, "Button Mapping", COLOR_TEXT);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y3, line, COLOR_TEXT);
+    }
+    /* Button Mapping row */
+    int y4 = y3 + ITEM_HEIGHT;
+    if (settings_menu_idx == SETTINGS_ROW_REMAP) {
+        render_text_pillbox(framebuffer, PADDING, y4, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    } else {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y4, "Button Mapping", COLOR_TEXT);
     }
     render_legend(framebuffer, LEGEND_X_NONE);
 }
