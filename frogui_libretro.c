@@ -331,6 +331,10 @@ static void settings_save_file(void) {
     fflush(f);
     fsync(fileno(f));
     fclose(f);
+    sync();  /* SD-card flush */
+    { char buf[64]; snprintf(buf, sizeof(buf), "settings save: filter=%s idx=%d",
+                                                filter_names[settings_filter_idx], settings_filter_idx);
+      dbg(buf); }
 }
 
 static const char* get_basename(const char *path) {
@@ -824,7 +828,10 @@ void retro_unload_game(void) {}
 
 static void render_settings_menu(void) {
     extern const Theme themes[];
-    render_clear_screen(framebuffer);
+    if (banner_is_loaded())
+        banner_render(framebuffer);
+    else
+        render_clear_screen(framebuffer);
     render_header(framebuffer, "SETTINGS");
 
     char line[128];
@@ -871,7 +878,10 @@ static void render_settings_menu(void) {
 }
 
 static void render_remap_wizard(void) {
-    render_clear_screen(framebuffer);
+    if (banner_is_loaded())
+        banner_render(framebuffer);
+    else
+        render_clear_screen(framebuffer);
     render_header(framebuffer, "BUTTON MAPPING");
 
     char line[128];
