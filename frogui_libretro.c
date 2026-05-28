@@ -257,17 +257,20 @@ static const char *font_names[] = {"GamePocket", "Monogram"};
 #define FONT_COUNT 2
 
 static bool settings_menu_active = false;
-static int settings_menu_idx = 0;       /* row: 0=theme, 1=font, 2=brightness, 3=filter, 4=remap */
+static int settings_menu_idx = 0;       /* row: 0=theme, 1=font, 2=brightness, 3=filter, 4=auto-resume, 5=remap */
 static int settings_theme_idx = 0;
 static int settings_font_idx = 0;
 static int settings_brightness = 75;    /* 0..100, step 5 */
 static int settings_filter_idx = 0;     /* 0=nearest, 1=bilinear */
 static int settings_filter_idx_on_enter = 0;  /* snapshot for restart-on-change */
+static int settings_auto_resume = 0;    /* 0=off, 1=on */
 static const char *filter_names[] = {"nearest", "bilinear"};
+static const char *onoff_names[] = {"off", "on"};
 #define FILTER_COUNT 2
 #define SETTINGS_BRIGHTNESS_STEP 5
-#define SETTINGS_ROW_COUNT 5
-#define SETTINGS_ROW_REMAP 4
+#define SETTINGS_ROW_COUNT 6
+#define SETTINGS_ROW_AUTORESUME 4
+#define SETTINGS_ROW_REMAP 5
 
 static bool remap_wizard_active = false;
 static int  remap_step = 0;
@@ -314,6 +317,8 @@ static void settings_load_file(void) {
         } else if (strcmp(line, "filter") == 0) {
             for (int i = 0; i < FILTER_COUNT; i++)
                 if (strcmp(filter_names[i], val) == 0) { settings_filter_idx = i; break; }
+        } else if (strcmp(line, "auto_resume") == 0) {
+            settings_auto_resume = (strcmp(val, "on") == 0) ? 1 : 0;
         }
     }
     fclose(f);
@@ -328,6 +333,7 @@ static void settings_save_file(void) {
     fprintf(f, "font=%s\n", font_names[settings_font_idx]);
     fprintf(f, "brightness=%d\n", settings_brightness);
     fprintf(f, "filter=%s\n", filter_names[settings_filter_idx]);
+    fprintf(f, "auto_resume=%s\n", onoff_names[settings_auto_resume]);
     fflush(f);
     fsync(fileno(f));
     fclose(f);
@@ -562,6 +568,8 @@ static void handle_input(void) {
                 if (settings_brightness > 100) settings_brightness = 100;
             } else if (settings_menu_idx == 3) {
                 settings_filter_idx = (settings_filter_idx + delta + FILTER_COUNT) % FILTER_COUNT;
+            } else if (settings_menu_idx == SETTINGS_ROW_AUTORESUME) {
+                settings_auto_resume = (settings_auto_resume + delta + 2) % 2;
             }
             settings_apply();
         }
@@ -867,12 +875,20 @@ static void render_settings_menu(void) {
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y3, line, COLOR_TEXT);
     }
-    /* Button Mapping row */
+    /* Auto-resume row */
+    snprintf(line, sizeof(line), "Auto-resume: < %s >", onoff_names[settings_auto_resume]);
     int y4 = y3 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_REMAP) {
-        render_text_pillbox(framebuffer, PADDING, y4, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    if (settings_menu_idx == SETTINGS_ROW_AUTORESUME) {
+        render_text_pillbox(framebuffer, PADDING, y4, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y4, "Button Mapping", COLOR_TEXT);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y4, line, COLOR_TEXT);
+    }
+    /* Button Mapping row */
+    int y5 = y4 + ITEM_HEIGHT;
+    if (settings_menu_idx == SETTINGS_ROW_REMAP) {
+        render_text_pillbox(framebuffer, PADDING, y5, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    } else {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y5, "Button Mapping", COLOR_TEXT);
     }
     render_legend(framebuffer, LEGEND_X_NONE);
 }
