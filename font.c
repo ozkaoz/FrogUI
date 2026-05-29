@@ -128,9 +128,18 @@ void font_draw_char(uint16_t *framebuffer, int screen_width, int screen_height,
                 int py = y + baseline + yoff + row;
 
                 if (px >= 0 && px < screen_width && py >= 0 && py < screen_height) {
-                    // Simple alpha blending
-                    if (alpha > 127) {
-                        framebuffer[py * screen_width + px] = color;
+                    uint16_t *dst = &framebuffer[py * screen_width + px];
+                    if (alpha >= 255) {
+                        *dst = color;
+                    } else {
+                        uint16_t bg = *dst;
+                        int fr = (color >> 11) & 0x1F, fg = (color >> 5) & 0x3F, fb = color & 0x1F;
+                        int br = (bg >> 11) & 0x1F, bgc = (bg >> 5) & 0x3F, bb = bg & 0x1F;
+                        int ia = 255 - alpha;
+                        int rr = (fr * alpha + br * ia) / 255;
+                        int rg = (fg * alpha + bgc * ia) / 255;
+                        int rb = (fb * alpha + bb * ia) / 255;
+                        *dst = (uint16_t)((rr << 11) | (rg << 5) | rb);
                     }
                 }
             }

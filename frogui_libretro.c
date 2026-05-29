@@ -136,10 +136,13 @@ static const ConsoleMapping console_mappings[] = {
     {"vapor",  CORES_PATH "/vaporspec_libretro.so"},
     {"amiga",  CORES_PATH "/uae_libretro.so"},
     {"atari-st", CORES_PATH "/castaway_libretro.so"},
-    /* PlayStation */
+    /* PlayStation: ps1/psx/PS run standalone PCSX4ALL (via is_ps1_folder);
+     * these pcsx_rearmed entries are only the fallback if the pcsx4all binary
+     * is missing.  ps1r runs the pcsx_rearmed libretro core directly. */
     {"ps1",    CORES_PATH "/pcsx_rearmed_libretro.so"},
     {"psx",    CORES_PATH "/pcsx_rearmed_libretro.so"},
     {"PS",     CORES_PATH "/pcsx_rearmed_libretro.so"},
+    {"ps1r",   CORES_PATH "/pcsx_rearmed_libretro.so"},
     {NULL, NULL}
 };
 
@@ -416,7 +419,11 @@ static void scan_directory(const char *path) {
         if (stat(full, &st) != 0) continue;
         if (!S_ISDIR(st.st_mode)) {
             const char *ext = strrchr(e->d_name, '.');
-            if (ext && (strcasecmp(ext,".csv")==0 || strcasecmp(ext,".txt")==0 ||
+            /* PICO-8 carts are .p8.png — keep them; only skip plain .png artwork. */
+            size_t nlen = strlen(e->d_name);
+            int is_p8png = nlen >= 7 && strcasecmp(e->d_name + nlen - 7, ".p8.png") == 0;
+            if (ext && !is_p8png &&
+                       (strcasecmp(ext,".csv")==0 || strcasecmp(ext,".txt")==0 ||
                         strcasecmp(ext,".xml")==0 || strcasecmp(ext,".jpg")==0 ||
                         strcasecmp(ext,".png")==0)) continue;
         }

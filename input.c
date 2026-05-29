@@ -37,6 +37,16 @@ static const int default_bits[FROG_BTN_COUNT] = {
 };
 
 static int remap_bits[FROG_BTN_COUNT];
+static uint32_t remap_raw_masks[FROG_BTN_COUNT]; /* precomputed: 1<<bit or 0 if unmapped */
+static uint32_t remap_logical_bits[FROG_BTN_COUNT]; /* precomputed: 1<<logical */
+
+static void rebuild_masks(void) {
+    for (int i = 0; i < FROG_BTN_COUNT; i++) {
+        int b = remap_bits[i];
+        remap_raw_masks[i]    = (b >= 0 && b <= 15) ? (1u << b) : 0;
+        remap_logical_bits[i] = 1u << i;
+    }
+}
 
 static const char *btn_names[FROG_BTN_COUNT] = {
     "UP","DOWN","LEFT","RIGHT","A","B","X","Y","L1","R1","L2","R2","START","SELECT"
@@ -50,6 +60,7 @@ const char *input_btn_name(FrogButton btn) {
 void input_reset_defaults(void) {
     for (int i = 0; i < FROG_BTN_COUNT; i++)
         remap_bits[i] = default_bits[i];
+    rebuild_masks();
 }
 
 int input_init(void) {
@@ -74,12 +85,12 @@ void input_update(void) {
     if (!cubevol_keys) return;
     uint32_t raw = *cubevol_keys & 0xFFFF;
     prev_state = current_state;
-    current_state = 0;
+    uint32_t s = 0;
     for (int i = 0; i < FROG_BTN_COUNT; i++) {
-        int bit = remap_bits[i];
-        if (bit >= 0 && bit <= 15 && (raw >> bit) & 1)
-            current_state |= (1u << i);
+        if (raw & remap_raw_masks[i])
+            s |= remap_logical_bits[i];
     }
+    current_state = s;
 }
 
 bool input_is_pressed(FrogButton btn) {
@@ -95,8 +106,10 @@ uint32_t input_get_raw_state(void) {
 }
 
 void input_set_raw_bit(FrogButton btn, int raw_bit) {
-    if (btn >= 0 && btn < FROG_BTN_COUNT)
+    if (btn >= 0 && btn < FROG_BTN_COUNT) {
         remap_bits[btn] = raw_bit;
+        rebuild_masks();
+    }
 }
 
 int input_get_raw_bit(FrogButton btn) {
@@ -105,8 +118,10 @@ int input_get_raw_bit(FrogButton btn) {
 }
 
 int input_load_remap(const char *path) {
+    static int loaded = 0;
+    if (loaded) return 0;
     FILE *f = fopen(path, "r");
-    if (!f) return -1;
+    if (!f) { loaded = 1; return -1; }
     char line[64];
     while (fgets(line, sizeof(line), f)) {
         char *eq = strchr(line, '=');
@@ -121,6 +136,8 @@ int input_load_remap(const char *path) {
         }
     }
     fclose(f);
+    rebuild_masks();
+    loaded = 1;
     return 0;
 }
 
