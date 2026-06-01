@@ -149,6 +149,26 @@ void font_draw_char(uint16_t *framebuffer, int screen_width, int screen_height,
     stbtt_FreeBitmap(bitmap, NULL);
 }
 
+/* Vertical metrics for centering: baseline = pixels from glyph-cell top down to
+ * the baseline; cap_height = pixel height of capital letters (all text is
+ * uppercased, so the visible ink is the cap band [baseline-cap_height, baseline]). */
+void font_cap_metrics(int *baseline_out, int *cap_height_out) {
+    int baseline = 0, cap = 0;
+    if (font_loaded) {
+        int ascent, descent, line_gap;
+        stbtt_GetFontVMetrics(&font_info, &ascent, &descent, &line_gap);
+        baseline = (int)(ascent * font_scale);
+        int gi = stbtt_FindGlyphIndex(&font_info, 'H');
+        int x0, y0, x1, y1;
+        if (gi && stbtt_GetGlyphBox(&font_info, gi, &x0, &y0, &x1, &y1))
+            cap = (int)((y1 - y0) * font_scale);
+        else
+            cap = baseline;
+    }
+    if (baseline_out)   *baseline_out = baseline;
+    if (cap_height_out) *cap_height_out = cap;
+}
+
 void font_draw_text(uint16_t *framebuffer, int screen_width, int screen_height,
                    int x, int y, const char *text, uint16_t color) {
     if (!font_loaded || !framebuffer || !text) return;

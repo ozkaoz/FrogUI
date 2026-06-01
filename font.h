@@ -20,6 +20,10 @@ void font_draw_text(uint16_t *framebuffer, int screen_width, int screen_height,
 // Measure text width in pixels
 int font_measure_text(const char *text);
 
+// Vertical metrics for centering: baseline (top-of-cell to baseline) and
+// cap_height (pixel height of capitals = the visible ink band).
+void font_cap_metrics(int *baseline_out, int *cap_height_out);
+
 // Get font character width/height — scale with UI_SCALE
 #ifndef UI_SCALE
 #define UI_SCALE 100

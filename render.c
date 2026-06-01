@@ -100,8 +100,14 @@ void render_text_pillbox(uint16_t *framebuffer, int x, int y, const char *text,
     int pillbox_width = text_width + left_padding + padding; // padding only on right
     int pillbox_height = text_height + padding;
     int pillbox_x = x - left_padding;
-    int pillbox_y = y - (padding / 2);
-    
+    /* Center pill on the cap-ink midline (text is uppercased, so visible ink is
+     * [y+baseline-cap, y+baseline]) rather than the em-box, which has dead
+     * descender space below and made text look top-heavy. */
+    int baseline, cap_h;
+    font_cap_metrics(&baseline, &cap_h);
+    int ink_center = y + baseline - cap_h / 2;
+    int pillbox_y = ink_center - pillbox_height / 2;
+
     // Draw pillbox background
     render_rounded_rect(framebuffer, pillbox_x, pillbox_y, pillbox_width, pillbox_height, 8, bg_color);
     
@@ -121,7 +127,10 @@ void render_legend(uint16_t *framebuffer, int x_button_mode) {
 
     int pill_h   = ITEM_HEIGHT - UI_S(4);          /* pill height matches item scale */
     int legend_y = SCREEN_HEIGHT - pill_h - UI_S(6); /* top of pill */
-    int text_y   = legend_y + (pill_h - (int)(20.0f * UI_SCALE / 100.0f)) / 2; /* vertically centre text in pill */
+    /* Place text so the cap-ink band centers in the pill (see render_text_pillbox). */
+    int baseline, cap_h;
+    font_cap_metrics(&baseline, &cap_h);
+    int text_y   = legend_y + pill_h / 2 - (baseline - cap_h / 2);
     int spacing  = UI_S(8);
 
     /* Right-anchored: A-ENTER  B-BACK (always), X hint to its left if active */
