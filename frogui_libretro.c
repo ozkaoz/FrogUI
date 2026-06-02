@@ -897,6 +897,15 @@ static void render_settings_menu(void) {
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y5, "Button Mapping", COLOR_TEXT);
     }
+    /* Warn on the Filter row when Nearest is selected: it's software-scaled
+     * and slower than Bilinear (hardware path), which can cause lag. */
+    if (settings_menu_idx == 3 && settings_filter_idx == 0) {
+        int yw = y5 + ITEM_HEIGHT + ITEM_HEIGHT / 2;
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, yw,
+                       "Nearest is software-scaled - slower than",  COLOR_DISABLED);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, yw + ITEM_HEIGHT,
+                       "Bilinear and may cause lag.", COLOR_DISABLED);
+    }
     render_legend(framebuffer, LEGEND_X_NONE);
 }
 
