@@ -26,7 +26,7 @@
 
 #define FB_X_VIS   180
 #define FB_Y_TOT  1014
-#define PHYS_W     854
+#define PHYS_W     640
 #define PHYS_H     480
 
 static int       fb_fd  = -1;

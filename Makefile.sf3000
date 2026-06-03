@@ -11,7 +11,7 @@ CFLAGS = -mips32r2 -march=mips32r2 -mtune=24kc -mfp32 -mhard-float -mlong-calls 
         -EL --sysroot=$(SYSROOT) -fPIC \
         -Wall -Wextra \
         -Ofast -DPLATFORM_SF3000 -DNDEBUG \
-        -DSCREEN_WIDTH=854 -DSCREEN_HEIGHT=480 -DUI_SCALE=150
+        -DSCREEN_WIDTH=640 -DSCREEN_HEIGHT=480 -DUI_SCALE=133
 
 # Include paths
 INCLUDES = -I$(SYSROOT)/usr/include
@@ -37,7 +37,10 @@ LIBRETRO_SOURCES = frogui_libretro.c \
                    theme.c \
                    settings.c \
                    recent_games.c \
-                   favorites.c
+                   favorites.c \
+                   backlight.c \
+                   banner.c \
+                   input.c
 
 LIBRETRO_TARGET = frogui_libretro.so
 
