@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdint.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -256,8 +257,71 @@ static void dbg(const char *msg) {
 #define SETTINGS_DIR  "/mnt/sdcard/frogui"
 #define SETTINGS_FILE SETTINGS_DIR "/settings.txt"
 
-static const char *font_names[] = {"GamePocket", "Monogram"};
-#define FONT_COUNT 2
+/* Fonts are discovered at runtime by scanning the font directories for
+ * .ttf/.otf files. font_files[] holds the on-disk filename (persisted in
+ * settings + passed to the loader); font_disp[] is the extension-stripped
+ * name shown in the menu. */
+#define MAX_FONTS    32
+#define FONT_STR_MAX 96
+static char font_files[MAX_FONTS][FONT_STR_MAX];
+static char font_disp[MAX_FONTS][FONT_STR_MAX];
+static int  font_count = 0;
+
+static int font_has_ext(const char *name) {
+    const char *dot = strrchr(name, '.');
+    return dot && (strcasecmp(dot, ".ttf") == 0 || strcasecmp(dot, ".otf") == 0);
+}
+
+static void font_add(const char *fname) {
+    if (font_count >= MAX_FONTS) return;
+    for (int i = 0; i < font_count; i++)
+        if (strcasecmp(font_files[i], fname) == 0) return;  /* dedup */
+    strncpy(font_files[font_count], fname, FONT_STR_MAX - 1);
+    font_files[font_count][FONT_STR_MAX - 1] = '\0';
+    font_count++;
+}
+
+static void font_scan(void) {
+    static const char *dirs[] = {
+        "/mnt/sdcard/cubegm/fonts",
+        "/mnt/sdcard/frogui/fonts",
+        "fonts",
+    };
+    font_count = 0;
+    for (size_t d = 0; d < sizeof(dirs) / sizeof(dirs[0]); d++) {
+        DIR *dp = opendir(dirs[d]);
+        if (!dp) continue;
+        struct dirent *e;
+        while ((e = readdir(dp))) {
+            if (e->d_name[0] == '.') continue;
+            if (font_has_ext(e->d_name)) font_add(e->d_name);
+        }
+        closedir(dp);
+    }
+    /* No fonts on disk: keep the built-in defaults as a safety net. */
+    if (font_count == 0) {
+        font_add("GamePocket-Regular-ZeroKern.ttf");
+        font_add("monogram.ttf");
+    }
+    /* Sort filenames alphabetically (case-insensitive) for a stable list. */
+    for (int i = 1; i < font_count; i++) {
+        char key[FONT_STR_MAX];
+        strncpy(key, font_files[i], FONT_STR_MAX);
+        int j = i - 1;
+        while (j >= 0 && strcasecmp(font_files[j], key) > 0) {
+            strncpy(font_files[j + 1], font_files[j], FONT_STR_MAX);
+            j--;
+        }
+        strncpy(font_files[j + 1], key, FONT_STR_MAX);
+    }
+    /* Build display names = filename minus extension. */
+    for (int i = 0; i < font_count; i++) {
+        strncpy(font_disp[i], font_files[i], FONT_STR_MAX - 1);
+        font_disp[i][FONT_STR_MAX - 1] = '\0';
+        char *dot = strrchr(font_disp[i], '.');
+        if (dot) *dot = '\0';
+    }
+}
 
 static bool settings_menu_active = false;
 static int settings_menu_idx = 0;       /* row: 0=theme, 1=font, 2=brightness, 3=filter, 4=auto-resume, 5=remap */
@@ -288,11 +352,12 @@ static void mkdir_p(const char *path) {
 static void settings_apply(void) {
     extern const int theme_count;
     if (settings_theme_idx < 0 || settings_theme_idx >= theme_count) settings_theme_idx = 0;
-    if (settings_font_idx < 0 || settings_font_idx >= FONT_COUNT) settings_font_idx = 0;
+    if (settings_font_idx < 0 || settings_font_idx >= font_count) settings_font_idx = 0;
     if (settings_brightness < 0)   settings_brightness = 0;
     if (settings_brightness > 100) settings_brightness = 100;
     theme_apply(settings_theme_idx);
-    font_load_from_settings(font_names[settings_font_idx]);
+    if (font_count > 0)
+        font_load_file(font_files[settings_font_idx]);
     cube_set_backlight(settings_brightness);
 }
 
@@ -313,8 +378,9 @@ static void settings_load_file(void) {
             for (int i = 0; i < theme_count; i++)
                 if (strcmp(themes[i].name, val) == 0) { settings_theme_idx = i; break; }
         } else if (strcmp(line, "font") == 0) {
-            for (int i = 0; i < FONT_COUNT; i++)
-                if (strcmp(font_names[i], val) == 0) { settings_font_idx = i; break; }
+            for (int i = 0; i < font_count; i++)
+                if (strcasecmp(font_files[i], val) == 0 ||
+                    strcasecmp(font_disp[i], val) == 0) { settings_font_idx = i; break; }
         } else if (strcmp(line, "brightness") == 0) {
             settings_brightness = atoi(val);
         } else if (strcmp(line, "filter") == 0) {
@@ -333,7 +399,7 @@ static void settings_save_file(void) {
     FILE *f = fopen(SETTINGS_FILE, "w");
     if (!f) { dbg("settings save: fopen failed"); return; }
     fprintf(f, "theme=%s\n", themes[settings_theme_idx].name);
-    fprintf(f, "font=%s\n", font_names[settings_font_idx]);
+    fprintf(f, "font=%s\n", font_count > 0 ? font_files[settings_font_idx] : "");
     fprintf(f, "brightness=%d\n", settings_brightness);
     fprintf(f, "filter=%s\n", filter_names[settings_filter_idx]);
     fprintf(f, "auto_resume=%s\n", onoff_names[settings_auto_resume]);
@@ -568,7 +634,8 @@ static void handle_input(void) {
             if (settings_menu_idx == 0) {
                 settings_theme_idx = (settings_theme_idx + delta + theme_count) % theme_count;
             } else if (settings_menu_idx == 1) {
-                settings_font_idx = (settings_font_idx + delta + FONT_COUNT) % FONT_COUNT;
+                if (font_count > 0)
+                    settings_font_idx = (settings_font_idx + delta + font_count) % font_count;
             } else if (settings_menu_idx == 2) {
                 settings_brightness += delta * SETTINGS_BRIGHTNESS_STEP;
                 if (settings_brightness < 0)   settings_brightness = 0;
@@ -807,6 +874,8 @@ void retro_init(void) {
     input_load_remap(KEYMAP_FILE);
     font_init();
     dbg("font_init done");
+    font_scan();
+    dbg("font_scan done");
     theme_init();
     dbg("theme_init done");
     settings_load_file();
@@ -859,7 +928,8 @@ static void render_settings_menu(void) {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y0, line, COLOR_TEXT);
     }
     /* Font row */
-    snprintf(line, sizeof(line), "Font: < %s >", font_names[settings_font_idx]);
+    snprintf(line, sizeof(line), "Font: < %s >",
+             font_count > 0 ? font_disp[settings_font_idx] : "(none)");
     int y1 = y0 + ITEM_HEIGHT;
     if (settings_menu_idx == 1) {
         render_text_pillbox(framebuffer, PADDING, y1, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);

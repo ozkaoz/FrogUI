@@ -70,6 +70,13 @@ static int load_font_file(const char *font_filename) {
     return 1;
 }
 
+void font_load_file(const char *font_filename) {
+    if (!font_filename || !font_filename[0]) return;
+    load_font_file(font_filename);
+    if (font_loaded)
+        font_scale = stbtt_ScaleForPixelHeight(&font_info, FONT_SIZE);
+}
+
 void font_load_from_settings(const char *font_name) {
     const char *font_filename = NULL;
     float custom_size = FONT_SIZE;
