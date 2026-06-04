@@ -870,6 +870,18 @@ void retro_set_input_state(retro_input_state_t cb)              { input_state_cb
 
 void retro_init(void) {
     dbg("retro_init start");
+    /* Runtime panel geometry from picoarch (device-detected). Must run before
+     * font_init / any layout use. Falls back to render.c defaults if env unset. */
+    {
+        const char *ew = getenv("TF_PANEL_W");
+        const char *eh = getenv("TF_PANEL_H");
+        const char *es = getenv("TF_UI_SCALE");
+        int w = ew ? atoi(ew) : 0;
+        int h = eh ? atoi(eh) : 0;
+        int s = es ? atoi(es) : 0;
+        render_set_geometry(w, h, s);
+        dbg("geometry set");
+    }
     input_init();
     input_load_remap(KEYMAP_FILE);
     font_init();

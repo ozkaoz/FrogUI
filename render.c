@@ -12,6 +12,17 @@
 #define min(a, b) ((a) < (b) ? (a) : (b))
 #endif
 
+/* Runtime panel geometry (defaults = SF3000 854x480; picoarch overrides via env). */
+int g_screen_w  = 854;
+int g_screen_h  = 480;
+int g_ui_scale  = 150;
+
+void render_set_geometry(int w, int h, int ui_scale) {
+    if (w > 0)        g_screen_w = w;
+    if (h > 0)        g_screen_h = h;
+    if (ui_scale > 0) g_ui_scale = ui_scale;
+}
+
 void render_init(uint16_t *framebuffer) {
     if (framebuffer) {
         render_clear_screen(framebuffer);

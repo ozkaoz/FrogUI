@@ -6,28 +6,24 @@
 #include "theme.h"
 
 /*
- * Screen dimensions — set via Makefile:
- *   -DSCREEN_WIDTH=854 -DSCREEN_HEIGHT=480
- * Default to SF2000 reference resolution if not set.
+ * Screen dimensions + UI scale are RUNTIME values (single dynamic core supports
+ * both SF3000 854x480 and R36SX 640x480). picoarch detects the panel and passes
+ * it via env (TF_PANEL_W / TF_PANEL_H / TF_UI_SCALE); retro_init reads them and
+ * calls render_set_geometry() before any layout/font init. Defaults below apply
+ * if env is absent. UI_SCALE: baseline layout designed for 480x320 (100 = 1x).
  */
-#ifndef SCREEN_WIDTH
-#define SCREEN_WIDTH  480
-#endif
-#ifndef SCREEN_HEIGHT
-#define SCREEN_HEIGHT 320
-#endif
+extern int g_screen_w;   /* panel width  px */
+extern int g_screen_h;   /* panel height px */
+extern int g_ui_scale;   /* integer scale, 100 = 1x of 480x320 baseline */
 
-/*
- * UI_SCALE — integer scale factor (100 = 1x baseline, 200 = 2x, 150 = 1.5x)
- * Baseline layout designed for 480x320. Set via Makefile:
- *   -DUI_SCALE=200   (SF3000 854x480)
- *   -DUI_SCALE=100   (SF2000 480x320)
- */
-#ifndef UI_SCALE
-#define UI_SCALE 100
-#endif
+#define SCREEN_WIDTH  g_screen_w
+#define SCREEN_HEIGHT g_screen_h
+#define UI_SCALE      g_ui_scale
 
-/* Scale a baseline constant by UI_SCALE */
+/* Set the runtime geometry. Call once in retro_init before font/layout use. */
+void render_set_geometry(int w, int h, int ui_scale);
+
+/* Scale a baseline constant by UI_SCALE (runtime) */
 #define UI_S(x) ((x) * UI_SCALE / 100)
 
 // Colors are now provided by the theme system

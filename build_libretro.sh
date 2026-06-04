@@ -5,7 +5,7 @@ SYSROOT="$HOME/sf3000-work/sf3000toolchain/mipsel-buildroot-linux-gnu_sdk-buildr
 CC="${MIPS}gcc"
 cd /home/tomaszz/sf3000-work/FrogUI
 
-CFLAGS="-mips32r2 -march=mips32r2 -mtune=24kc -mfp32 -mhard-float -mlong-calls -EL --sysroot=$SYSROOT -fPIC -G0 -Wall -I./ -I$SYSROOT/usr/include -Ofast -DPLATFORM_SF3000 -DNDEBUG -D__LIBRETRO__ -DSCREEN_WIDTH=640 -DSCREEN_HEIGHT=480 -DUI_SCALE=133"
+CFLAGS="-mips32r2 -march=mips32r2 -mtune=24kc -mfp32 -mhard-float -mlong-calls -EL --sysroot=$SYSROOT -fPIC -G0 -Wall -I./ -I$SYSROOT/usr/include -Ofast -DPLATFORM_SF3000 -DNDEBUG -D__LIBRETRO__"
 
 for src in frogui_libretro.c render.c font.c recent_games.c settings.c theme.c favorites.c banner.c backlight.c input.c; do
     obj="${src%.c}.lo"
