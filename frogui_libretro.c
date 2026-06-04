@@ -891,8 +891,8 @@ void retro_init(void) {
     theme_init();
     dbg("theme_init done");
     settings_load_file();
-    settings_apply();
-    fb1_set_visible(1);   /* ensure OSD overlay (battery) is shown */
+    fb1_set_visible(1);   /* restart cubevol for OSD overlay — also resets backlight */
+    settings_apply();     /* apply AFTER cubevol restart so our brightness wins */
     dbg("settings loaded");
     recent_games_init();
     dbg("recent_games_init done");
