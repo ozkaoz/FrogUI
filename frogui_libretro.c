@@ -328,16 +328,17 @@ static int settings_menu_idx = 0;       /* row: 0=theme, 1=font, 2=brightness, 3
 static int settings_theme_idx = 0;
 static int settings_font_idx = 0;
 static int settings_brightness = 75;    /* 0..100, step 5 */
-static int settings_filter_idx = 0;     /* 0=nearest, 1=bilinear */
+static int settings_filter_idx = 1;     /* forced bilinear (option removed from menu) */
 static int settings_filter_idx_on_enter = 0;  /* snapshot for restart-on-change */
 static int settings_auto_resume = 0;    /* 0=off, 1=on */
 static const char *filter_names[] = {"nearest", "bilinear"};
 static const char *onoff_names[] = {"off", "on"};
 #define FILTER_COUNT 2
 #define SETTINGS_BRIGHTNESS_STEP 5
-#define SETTINGS_ROW_COUNT 6
-#define SETTINGS_ROW_AUTORESUME 4
-#define SETTINGS_ROW_REMAP 5
+/* Filter option removed from the menu — always bilinear (HW path). */
+#define SETTINGS_ROW_COUNT 5
+#define SETTINGS_ROW_AUTORESUME 3
+#define SETTINGS_ROW_REMAP 4
 
 static bool remap_wizard_active = false;
 static int  remap_step = 0;
@@ -640,8 +641,6 @@ static void handle_input(void) {
                 settings_brightness += delta * SETTINGS_BRIGHTNESS_STEP;
                 if (settings_brightness < 0)   settings_brightness = 0;
                 if (settings_brightness > 100) settings_brightness = 100;
-            } else if (settings_menu_idx == 3) {
-                settings_filter_idx = (settings_filter_idx + delta + FILTER_COUNT) % FILTER_COUNT;
             } else if (settings_menu_idx == SETTINGS_ROW_AUTORESUME) {
                 settings_auto_resume = (settings_auto_resume + delta + 2) % 2;
             }
@@ -956,37 +955,20 @@ static void render_settings_menu(void) {
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y2, line, COLOR_TEXT);
     }
-    /* Filter row */
-    snprintf(line, sizeof(line), "Filter: < %s >", filter_names[settings_filter_idx]);
+    /* Auto-resume row */
+    snprintf(line, sizeof(line), "Auto-resume: < %s >", onoff_names[settings_auto_resume]);
     int y3 = y2 + ITEM_HEIGHT;
-    if (settings_menu_idx == 3) {
+    if (settings_menu_idx == SETTINGS_ROW_AUTORESUME) {
         render_text_pillbox(framebuffer, PADDING, y3, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y3, line, COLOR_TEXT);
     }
-    /* Auto-resume row */
-    snprintf(line, sizeof(line), "Auto-resume: < %s >", onoff_names[settings_auto_resume]);
-    int y4 = y3 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_AUTORESUME) {
-        render_text_pillbox(framebuffer, PADDING, y4, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-    } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y4, line, COLOR_TEXT);
-    }
     /* Button Mapping row */
-    int y5 = y4 + ITEM_HEIGHT;
+    int y4 = y3 + ITEM_HEIGHT;
     if (settings_menu_idx == SETTINGS_ROW_REMAP) {
-        render_text_pillbox(framebuffer, PADDING, y5, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+        render_text_pillbox(framebuffer, PADDING, y4, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y5, "Button Mapping", COLOR_TEXT);
-    }
-    /* Warn on the Filter row when Nearest is selected: it's software-scaled
-     * and slower than Bilinear (hardware path), which can cause lag. */
-    if (settings_menu_idx == 3 && settings_filter_idx == 0) {
-        int yw = y5 + ITEM_HEIGHT + ITEM_HEIGHT / 2;
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, yw,
-                       "Nearest is software-scaled - slower than",  COLOR_DISABLED);
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, yw + ITEM_HEIGHT,
-                       "Bilinear and may cause lag.", COLOR_DISABLED);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y4, "Button Mapping", COLOR_TEXT);
     }
     render_legend(framebuffer, LEGEND_X_NONE);
 }
