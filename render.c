@@ -133,7 +133,7 @@ void render_header(uint16_t *framebuffer, const char *title) {
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, 10, title, COLOR_HEADER);
 }
 
-void render_legend(uint16_t *framebuffer, int x_button_mode) {
+void render_legend(uint16_t *framebuffer, int x_button_mode, int show_select) {
     if (!framebuffer) return;
 
     int pill_h   = ITEM_HEIGHT - UI_S(4);          /* pill height matches item scale */
@@ -162,6 +162,15 @@ void render_legend(uint16_t *framebuffer, int x_button_mode) {
         int x = anchor - w;
         render_rounded_rect(framebuffer, x - 4, legend_y, w + 8, pill_h, UI_S(8), COLOR_LEGEND_BG);
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, x, text_y, xl, COLOR_LEGEND);
+        anchor = x - spacing;
+    }
+
+    if (show_select) {
+        const char *sl = " SEL-OPTIONS ";
+        int w = font_measure_text(sl);
+        int x = anchor - w;
+        render_rounded_rect(framebuffer, x - 4, legend_y, w + 8, pill_h, UI_S(8), COLOR_LEGEND_BG);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, x, text_y, sl, COLOR_LEGEND);
     }
 }
 

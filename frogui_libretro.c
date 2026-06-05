@@ -28,6 +28,7 @@
 #include "banner.h"
 #include "backlight.h"
 #include "input.h"
+#include "core_override.h"
 
 #define SDCARD_BASE  "/mnt/sdcard"
 #define CORES_PATH   SDCARD_BASE "/cubegm/cores"
@@ -217,6 +218,41 @@ static const char* get_core_for_extension(const char *filename) {
     return NULL;
 }
 
+/* --- Available cores for the per-game / per-folder core picker ---
+ * Deduped list built from console_mappings. Index 0 = "Default (auto)"
+ * which clears any override and falls back to folder/extension mapping. */
+typedef struct { char name[64]; const char *path; } CoreChoice;
+static CoreChoice core_choices[160];
+static int core_choice_count = 0;
+
+static void build_core_choices(void) {
+    strcpy(core_choices[0].name, "Default (auto)");
+    core_choices[0].path = NULL;
+    core_choice_count = 1;
+    for (int i = 0; console_mappings[i].console_name; i++) {
+        const char *p = console_mappings[i].core_path;
+        int dup = 0;
+        for (int j = 1; j < core_choice_count; j++)
+            if (strcmp(core_choices[j].path, p) == 0) { dup = 1; break; }
+        if (dup || core_choice_count >= (int)(sizeof(core_choices)/sizeof(core_choices[0])))
+            continue;
+        const char *base = strrchr(p, '/'); base = base ? base + 1 : p;
+        char nm[64]; strncpy(nm, base, sizeof(nm)-1); nm[sizeof(nm)-1] = '\0';
+        char *suf = strstr(nm, "_libretro.so"); if (suf) *suf = '\0';
+        strncpy(core_choices[core_choice_count].name, nm, 63);
+        core_choices[core_choice_count].name[63] = '\0';
+        core_choices[core_choice_count].path = p;
+        core_choice_count++;
+    }
+}
+
+static int core_choice_index_for_path(const char *path) {
+    if (!path) return 0;
+    for (int i = 1; i < core_choice_count; i++)
+        if (strcmp(core_choices[i].path, path) == 0) return i;
+    return 0;
+}
+
 /* Libretro callbacks */
 static retro_video_refresh_t     video_cb     = NULL;
 static retro_environment_t       environ_cb   = NULL;
@@ -242,6 +278,13 @@ static uint16_t *framebuffer = NULL;
 static bool shutdown_requested = false;
 static bool viewing_recents = false;
 static bool viewing_favourites = false;
+
+/* Per-game / per-folder core picker overlay (opened with SELECT) */
+static bool core_picker_active = false;
+static int  core_picker_idx = 0;
+static int  core_picker_scroll = 0;
+static char core_picker_key[MAX_PATH_LEN];   /* ROM path (per-game) or folder path */
+static char core_picker_title[160];          /* shown under header */
 
 static void dbg(const char *msg) {
     FILE *f = fopen("/tmp/frogui_crash.log", "a");
@@ -601,6 +644,36 @@ static bool is_ps1_folder(const char *folder) {
 static void handle_input(void) {
     input_update();
 
+    /* Core picker overlay: choose an override core for the current ROM/folder */
+    if (core_picker_active) {
+        if (input_was_pressed(FROG_BTN_UP)) {
+            core_picker_idx = (core_picker_idx - 1 + core_choice_count) % core_choice_count;
+        }
+        if (input_was_pressed(FROG_BTN_DOWN)) {
+            core_picker_idx = (core_picker_idx + 1) % core_choice_count;
+        }
+        if (input_was_pressed(FROG_BTN_LEFT)) {
+            core_picker_idx -= VISIBLE_ENTRIES;
+            if (core_picker_idx < 0) core_picker_idx = 0;
+        }
+        if (input_was_pressed(FROG_BTN_RIGHT)) {
+            core_picker_idx += VISIBLE_ENTRIES;
+            if (core_picker_idx >= core_choice_count) core_picker_idx = core_choice_count - 1;
+        }
+        if (core_picker_idx < core_picker_scroll)
+            core_picker_scroll = core_picker_idx;
+        if (core_picker_idx >= core_picker_scroll + VISIBLE_ENTRIES)
+            core_picker_scroll = core_picker_idx - VISIBLE_ENTRIES + 1;
+        if (input_was_pressed(FROG_BTN_A)) {
+            core_override_set(core_picker_key, core_choices[core_picker_idx].path);
+            core_picker_active = false;
+        }
+        if (input_was_pressed(FROG_BTN_B)) {
+            core_picker_active = false;
+        }
+        return;
+    }
+
     /* Remap wizard: detect raw rising edge on any bit; B = skip this step */
     if (remap_wizard_active) {
         uint32_t raw   = input_get_raw_state();
@@ -658,6 +731,35 @@ static void handle_input(void) {
             settings_save_file();
             settings_menu_active = false;
         }
+        return;
+    }
+
+    /* SELECT: open core picker. On a ROM file → per-game override; on a system
+     * folder → per-folder override. Not available in recents/favourites views. */
+    if (input_was_pressed(FROG_BTN_SELECT) && !viewing_recents && !viewing_favourites &&
+        selected_index < entry_count &&
+        strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
+        strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
+        strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0) {
+        const char *cur;
+        if (entries[selected_index].is_dir) {
+            snprintf(core_picker_key, sizeof(core_picker_key), "%s/%s",
+                     current_path, entries[selected_index].name);
+            snprintf(core_picker_title, sizeof(core_picker_title), "Folder: %s",
+                     entries[selected_index].name);
+            cur = core_override_lookup(NULL, core_picker_key);
+        } else {
+            snprintf(core_picker_key, sizeof(core_picker_key), "%s/%s",
+                     current_path, entries[selected_index].name);
+            snprintf(core_picker_title, sizeof(core_picker_title), "Game: %s",
+                     entries[selected_index].name);
+            cur = core_override_lookup(core_picker_key, NULL);
+        }
+        core_picker_idx = core_choice_index_for_path(cur);
+        core_picker_scroll = 0;
+        if (core_picker_idx >= VISIBLE_ENTRIES)
+            core_picker_scroll = core_picker_idx - VISIBLE_ENTRIES + 1;
+        core_picker_active = true;
         return;
     }
 
@@ -777,12 +879,16 @@ static void handle_input(void) {
                 settings_filter_idx_on_enter = settings_filter_idx;
             } else {
                 const char *folder = get_console_folder(current_path);
-                const char *core   = get_core_for_folder(folder);
+                char rom_path[MAX_PATH_LEN];
+                snprintf(rom_path, sizeof(rom_path), "%s/%s", current_path, entries[selected_index].name);
+                /* per-game / per-folder override wins over folder/extension default */
+                const char *ov = core_override_lookup(rom_path, current_path);
+                const char *core = ov ? ov : get_core_for_folder(folder);
                 if (!core)
                     core = get_core_for_extension(entries[selected_index].name);
-                if (core) {
-                    char rom_path[MAX_PATH_LEN];
-                    snprintf(rom_path, sizeof(rom_path), "%s/%s", current_path, entries[selected_index].name);
+                if (ov) {
+                    request_game_launch(ov, rom_path);   /* override → always libretro */
+                } else if (core) {
                     if (is_ps1_folder(folder) && access(PCSX4ALL_BIN, F_OK) == 0)
                         request_standalone_launch(PCSX4ALL_BIN, rom_path);
                     else
@@ -897,6 +1003,9 @@ void retro_init(void) {
     dbg("recent_games_init done");
     favorites_init();
     dbg("favorites_init done");
+    core_override_load();
+    build_core_choices();
+    dbg("core overrides loaded");
 
     framebuffer = calloc(SCREEN_WIDTH * SCREEN_HEIGHT, sizeof(uint16_t));
     dbg("calloc done");
@@ -970,7 +1079,7 @@ static void render_settings_menu(void) {
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y4, "Button Mapping", COLOR_TEXT);
     }
-    render_legend(framebuffer, LEGEND_X_NONE);
+    render_legend(framebuffer, LEGEND_X_NONE, 0);
 }
 
 static void render_remap_wizard(void) {
@@ -987,6 +1096,33 @@ static void render_remap_wizard(void) {
 
     y += ITEM_HEIGHT;
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, "[B] = skip / keep default", COLOR_TEXT);
+}
+
+static void render_core_picker(void) {
+    if (banner_is_loaded())
+        banner_render(framebuffer);
+    else
+        render_clear_screen(framebuffer);
+    render_header(framebuffer, "SELECT CORE");
+
+    int y = START_Y;
+    /* subtitle: which game/folder we're overriding */
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, core_picker_title, COLOR_TEXT);
+    y += ITEM_HEIGHT;
+
+    int rows = VISIBLE_ENTRIES - 1;   /* one row used by the subtitle */
+    if (rows < 1) rows = 1;
+    int visible = min(core_choice_count - core_picker_scroll, rows);
+    for (int i = 0; i < visible; i++) {
+        int idx = core_picker_scroll + i;
+        const char *line = core_choices[idx].name;
+        int ry = y + i * ITEM_HEIGHT;
+        if (idx == core_picker_idx)
+            render_text_pillbox(framebuffer, PADDING, ry, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+        else
+            font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, ry, line, COLOR_TEXT);
+    }
+    render_legend(framebuffer, LEGEND_X_NONE, 0);
 }
 
 void retro_run(void) {
@@ -1026,7 +1162,9 @@ void retro_run(void) {
         }
     }
 
-    if (remap_wizard_active) {
+    if (core_picker_active) {
+        render_core_picker();
+    } else if (remap_wizard_active) {
         render_remap_wizard();
     } else if (settings_menu_active) {
         render_settings_menu();
@@ -1068,7 +1206,14 @@ void retro_run(void) {
                               ? LEGEND_X_REMOVE : LEGEND_X_FAVOURITE;
             }
         }
-        render_legend(framebuffer, legend_mode);
+        /* SELECT opens the core picker on folders + real ROMs (matches the SELECT
+         * handler guard): show the "SEL-OPTIONS" hint there. */
+        int show_select = (!viewing_recents && !viewing_favourites &&
+                           selected_index < entry_count &&
+                           strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
+                           strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
+                           strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0);
+        render_legend(framebuffer, legend_mode, show_select);
     }
 
     if (video_cb)
