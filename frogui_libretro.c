@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <ctype.h>
+#include <math.h>
 #include <stdbool.h>
 
 #include "libretro.h"
@@ -387,14 +388,16 @@ static int settings_brightness = 75;    /* 0..100, step 5 */
 static int settings_filter_idx = 1;     /* forced bilinear (option removed from menu) */
 static int settings_filter_idx_on_enter = 0;  /* snapshot for restart-on-change */
 static int settings_auto_resume = 0;    /* 0=off, 1=on */
+static int settings_anim = 1;           /* UI animations: 0=off, 1=on */
 static const char *filter_names[] = {"nearest", "bilinear"};
 static const char *onoff_names[] = {"off", "on"};
 #define FILTER_COUNT 2
 #define SETTINGS_BRIGHTNESS_STEP 5
 /* Filter option removed from the menu — always bilinear (HW path). */
-#define SETTINGS_ROW_COUNT 5
+#define SETTINGS_ROW_COUNT 6
 #define SETTINGS_ROW_AUTORESUME 3
-#define SETTINGS_ROW_REMAP 4
+#define SETTINGS_ROW_ANIM 4
+#define SETTINGS_ROW_REMAP 5
 
 static bool remap_wizard_active = false;
 static int  remap_step = 0;
@@ -416,6 +419,7 @@ static void settings_apply(void) {
     if (font_count > 0)
         font_load_file(font_files[settings_font_idx]);
     cube_set_backlight(settings_brightness);
+    banner_set_anim(settings_anim);
 }
 
 static void settings_load_file(void) {
@@ -443,6 +447,8 @@ static void settings_load_file(void) {
         } else if (strcmp(line, "filter") == 0) {
             for (int i = 0; i < FILTER_COUNT; i++)
                 if (strcmp(filter_names[i], val) == 0) { settings_filter_idx = i; break; }
+        } else if (strcmp(line, "animations") == 0) {
+            settings_anim = (strcmp(val, "off") == 0) ? 0 : 1;
         } else if (strcmp(line, "auto_resume") == 0) {
             settings_auto_resume = (strcmp(val, "on") == 0) ? 1 : 0;
         }
@@ -460,6 +466,7 @@ static void settings_save_file(void) {
     fprintf(f, "brightness=%d\n", settings_brightness);
     fprintf(f, "filter=%s\n", filter_names[settings_filter_idx]);
     fprintf(f, "auto_resume=%s\n", onoff_names[settings_auto_resume]);
+    fprintf(f, "animations=%s\n", onoff_names[settings_anim]);
     fflush(f);
     fsync(fileno(f));
     fclose(f);
@@ -862,6 +869,8 @@ static void handle_input(void) {
                 if (settings_brightness > 100) settings_brightness = 100;
             } else if (settings_menu_idx == SETTINGS_ROW_AUTORESUME) {
                 settings_auto_resume = (settings_auto_resume + delta + 2) % 2;
+            } else if (settings_menu_idx == SETTINGS_ROW_ANIM) {
+                settings_anim = (settings_anim + delta + 2) % 2;
             }
             settings_apply();
         }
@@ -1234,12 +1243,20 @@ static void render_settings_menu(void) {
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y3, line, COLOR_TEXT);
     }
-    /* Button Mapping row */
+    /* Animations row */
+    snprintf(line, sizeof(line), "Animations: < %s >", onoff_names[settings_anim]);
     int y4 = y3 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_REMAP) {
-        render_text_pillbox(framebuffer, PADDING, y4, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    if (settings_menu_idx == SETTINGS_ROW_ANIM) {
+        render_text_pillbox(framebuffer, PADDING, y4, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y4, "Button Mapping", COLOR_TEXT);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y4, line, COLOR_TEXT);
+    }
+    /* Button Mapping row */
+    int y5 = y4 + ITEM_HEIGHT;
+    if (settings_menu_idx == SETTINGS_ROW_REMAP) {
+        render_text_pillbox(framebuffer, PADDING, y5, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    } else {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y5, "Button Mapping", COLOR_TEXT);
     }
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
@@ -1377,11 +1394,13 @@ void retro_run(void) {
                     ? "TREEFROGUI: SYSTEMS" : get_basename(current_path);
         }
         render_header(framebuffer, title);
-        int visible = min(entry_count - scroll_offset, VISIBLE_ENTRIES);
-        for (int i = 0; i < visible; i++) {
-            int idx = scroll_offset + i;
-            render_menu_item(framebuffer, idx, entries[idx].name, entries[idx].is_dir,
-                             (idx == selected_index), scroll_offset, 0);
+        {
+            int visible = min(entry_count - scroll_offset, VISIBLE_ENTRIES);
+            for (int i = 0; i < visible; i++) {
+                int idx = scroll_offset + i;
+                render_menu_item(framebuffer, idx, entries[idx].name, entries[idx].is_dir,
+                                 (idx == selected_index), scroll_offset, 0);
+            }
         }
         /* Compute Y-button legend mode for current selection */
         int legend_mode = LEGEND_X_NONE;

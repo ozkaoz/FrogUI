@@ -81,9 +81,25 @@ void input_deinit(void) {
     shmid = -1;
 }
 
+/* Right-stick directions reach us as the A/B/X/Y bits (cubevol merges the analog
+ * stick into the same GPIO matrix bits as the face buttons — no separable signal
+ * anywhere). We can't tell a real press from a sustained stick deflection, but we
+ * CAN drop accidental drift: brief sub-frame chatter as the stick crosses the
+ * threshold. Require the face bits (0xF000 = X/A/B/Y) to be stable for 2 frames
+ * before committing. Real taps (>=50ms) pass; 1-frame blips are filtered. Dpad
+ * and the rest stay instant. */
+#define FACE_BITS 0xF000u
+
 void input_update(void) {
     if (!cubevol_keys) return;
     uint32_t raw = *cubevol_keys & 0xFFFF;
+
+    static uint32_t last_raw = 0, stable_face = 0;
+    uint32_t face = raw & FACE_BITS;
+    if ((last_raw & FACE_BITS) == face) stable_face = face;  /* stable 2 frames */
+    last_raw = raw;
+    raw = (raw & ~FACE_BITS) | stable_face;
+
     prev_state = current_state;
     uint32_t s = 0;
     for (int i = 0; i < FROG_BTN_COUNT; i++) {

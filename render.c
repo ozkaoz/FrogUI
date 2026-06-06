@@ -183,6 +183,26 @@ void render_legend(uint16_t *framebuffer, int x_button_mode, int show_select, in
     }
 }
 
+/* Draw one row at an explicit pixel y (used by the animated list). */
+void render_menu_row(uint16_t *framebuffer, const char *name, int is_dir,
+                     int is_selected, int is_favorited, int y) {
+    if (!framebuffer || !name) return;
+
+    int text_x = PADDING;
+    if (is_favorited) {
+        const char *star = "*";
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, star, COLOR_HEADER);
+        text_x = PADDING + 15;
+    }
+
+    if (is_selected) {
+        render_text_pillbox(framebuffer, text_x, y, name, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    } else {
+        uint16_t text_color = is_dir ? COLOR_FOLDER : COLOR_TEXT;
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, text_x, y, name, text_color);
+    }
+}
+
 void render_menu_item(uint16_t *framebuffer, int index, const char *name, int is_dir,
                      int is_selected, int scroll_offset, int is_favorited) {
     if (!framebuffer || !name) return;
@@ -190,24 +210,8 @@ void render_menu_item(uint16_t *framebuffer, int index, const char *name, int is
     int visible_index = index - scroll_offset;
     if (visible_index < 0 || visible_index >= VISIBLE_ENTRIES) return;
 
-    int y = START_Y + (visible_index * ITEM_HEIGHT);
-
-    // Draw favorite star if favorited
-    int text_x = PADDING;
-    if (is_favorited) {
-        const char *star = "*"; // Asterisk as favorite marker
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, star, COLOR_HEADER);
-        text_x = PADDING + 15; // Offset text to the right of the star
-    }
-
-    if (is_selected) {
-        // Use unified pillbox rendering
-        render_text_pillbox(framebuffer, text_x, y, name, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-    } else {
-        // Draw normal text
-        uint16_t text_color = is_dir ? COLOR_FOLDER : COLOR_TEXT;
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, text_x, y, name, text_color);
-    }
+    render_menu_row(framebuffer, name, is_dir, is_selected, is_favorited,
+                    START_Y + visible_index * ITEM_HEIGHT);
 }
 
 // Thumbnail implementation
