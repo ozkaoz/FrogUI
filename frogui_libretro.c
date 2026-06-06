@@ -16,6 +16,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <ctype.h>
 #include <stdbool.h>
 
 #include "libretro.h"
@@ -279,6 +280,17 @@ static uint16_t *framebuffer = NULL;
 static bool shutdown_requested = false;
 static bool viewing_recents = false;
 static bool viewing_favourites = false;
+
+/* Search (X button): on-screen keyboard → filtered results.
+ * Scope = the folder you were in (ROMS_PATH root = search everything). */
+static bool search_kbd_active = false;     /* typing the query */
+static bool viewing_search    = false;     /* showing results list */
+static char search_query[64]  = "";
+static int  search_kbd_r = 0, search_kbd_c = 0;
+static char search_scope[MAX_PATH_LEN] = "";
+typedef struct { char name[256]; char path[MAX_PATH_LEN]; } SearchResult;
+static SearchResult *search_results = NULL;
+static int search_results_count = 0, search_results_cap = 0;
 
 /* Per-game / per-folder core picker overlay (opened with SELECT) */
 static bool core_picker_active = false;
@@ -642,8 +654,141 @@ static bool is_ps1_folder(const char *folder) {
            strcasecmp(folder, "PS")  == 0;
 }
 
+/* ----------------------------- Search (X button) ----------------------------- */
+
+/* On-screen keyboard layout. Rows 0-3 are character keys; row 4 is special. */
+static const char *KBD_ROWS[4] = {
+    "1234567890",
+    "QWERTYUIOP",
+    "ASDFGHJKL",
+    "ZXCVBNM",
+};
+#define KBD_SPECIAL_ROW 4
+#define KBD_NROWS       5
+static const char *KBD_SPECIAL[3] = { "SPACE", "DEL", "GO" };
+
+static int kbd_row_len(int r) {
+    return (r == KBD_SPECIAL_ROW) ? 3 : (int)strlen(KBD_ROWS[r]);
+}
+
+static int str_icontains(const char *hay, const char *needle) {
+    if (!needle[0]) return 1;
+    for (; *hay; hay++) {
+        const char *h = hay, *n = needle;
+        while (*h && *n && tolower((unsigned char)*h) == tolower((unsigned char)*n)) { h++; n++; }
+        if (!*n) return 1;
+    }
+    return 0;
+}
+
+static void search_add_result(const char *name, const char *path) {
+    if (search_results_count >= search_results_cap) {
+        int nc = search_results_cap ? search_results_cap * 2 : 128;
+        SearchResult *nr = realloc(search_results, nc * sizeof(SearchResult));
+        if (!nr) return;
+        search_results = nr; search_results_cap = nc;
+    }
+    SearchResult *r = &search_results[search_results_count];
+    strncpy(r->name, name, sizeof(r->name) - 1); r->name[sizeof(r->name)-1] = '\0';
+    strncpy(r->path, path, sizeof(r->path) - 1); r->path[sizeof(r->path)-1] = '\0';
+    search_results_count++;
+}
+
+static void search_walk(const char *dir, int depth) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d)) && search_results_count < 2000) {
+        if (e->d_name[0] == '.') continue;
+        char p[MAX_PATH_LEN];
+        snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
+        struct stat st;
+        if (stat(p, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            if (depth < 3) search_walk(p, depth + 1);
+        } else if (str_icontains(e->d_name, search_query)) {
+            search_add_result(e->d_name, p);
+        }
+    }
+    closedir(d);
+}
+
+static void run_search(void) {
+    search_results_count = 0;
+    if (search_query[0])
+        search_walk(search_scope[0] ? search_scope : ROMS_PATH, 0);
+
+    /* mirror results into entries[] for the shared list renderer */
+    while (search_results_count > entry_capacity) {
+        entry_capacity = entry_capacity ? entry_capacity * 2 : INITIAL_ENTRIES_CAPACITY;
+        entries = realloc(entries, entry_capacity * sizeof(DirEntry));
+        if (!entries) return;
+    }
+    entry_count = 0;
+    for (int i = 0; i < search_results_count; i++) {
+        strncpy(entries[entry_count].name, search_results[i].name, 255);
+        entries[entry_count].name[255] = '\0';
+        entries[entry_count].is_dir = 0;
+        entry_count++;
+    }
+    viewing_search = true;
+    search_kbd_active = false;
+    selected_index = 0; scroll_offset = 0;
+}
+
+static void search_launch(int idx) {
+    if (idx < 0 || idx >= search_results_count) return;
+    const char *path = search_results[idx].path;
+    const char *folder = get_console_folder(path);
+    const char *ov = core_override_lookup(path, NULL);
+    const char *core = ov ? ov : get_core_for_folder(folder);
+    if (!core) core = get_core_for_extension(path);
+    if (ov)
+        request_game_launch(ov, path);
+    else if (core) {
+        if (is_ps1_folder(folder) && access(PCSX4ALL_BIN, F_OK) == 0)
+            request_standalone_launch(PCSX4ALL_BIN, path);
+        else
+            request_game_launch(core, path);
+    } else {
+        dbg("search: no core mapping for result");
+    }
+}
+
 static void handle_input(void) {
     input_update();
+
+    /* Search keyboard overlay */
+    if (search_kbd_active) {
+        if (input_was_pressed(FROG_BTN_UP))    search_kbd_r = (search_kbd_r - 1 + KBD_NROWS) % KBD_NROWS;
+        if (input_was_pressed(FROG_BTN_DOWN))  search_kbd_r = (search_kbd_r + 1) % KBD_NROWS;
+        if (input_was_pressed(FROG_BTN_LEFT))  search_kbd_c--;
+        if (input_was_pressed(FROG_BTN_RIGHT)) search_kbd_c++;
+        { int rl = kbd_row_len(search_kbd_r);
+          if (search_kbd_c < 0) search_kbd_c = rl - 1;
+          if (search_kbd_c >= rl) search_kbd_c = 0; }
+        if (input_was_pressed(FROG_BTN_A)) {
+            int len = (int)strlen(search_query);
+            if (search_kbd_r == KBD_SPECIAL_ROW) {
+                if (search_kbd_c == 0) { if (len < (int)sizeof(search_query)-1) { search_query[len]=' '; search_query[len+1]='\0'; } }
+                else if (search_kbd_c == 1) { if (len > 0) search_query[len-1] = '\0'; }
+                else run_search();
+            } else if (len < (int)sizeof(search_query)-1) {
+                search_query[len] = KBD_ROWS[search_kbd_r][search_kbd_c];
+                search_query[len+1] = '\0';
+            }
+        }
+        if (input_was_pressed(FROG_BTN_Y)) {            /* quick backspace */
+            int len = (int)strlen(search_query); if (len > 0) search_query[len-1] = '\0';
+        }
+        if (input_was_pressed(FROG_BTN_START)) run_search();
+        if (input_was_pressed(FROG_BTN_B)) {           /* cancel → restore browser list */
+            search_kbd_active = false;
+            scan_directory(current_path);
+            selected_index = 0; scroll_offset = 0;
+        }
+        return;
+    }
 
     /* Core picker overlay: choose an override core for the current ROM/folder */
     if (core_picker_active) {
@@ -735,9 +880,19 @@ static void handle_input(void) {
         return;
     }
 
+    /* X: open search. Scope = current folder (ROMS root → search everything). */
+    if (input_was_pressed(FROG_BTN_X) && !viewing_recents && !viewing_favourites && !viewing_search) {
+        search_query[0] = '\0';
+        search_kbd_r = 0; search_kbd_c = 0;
+        strncpy(search_scope, current_path, sizeof(search_scope)-1);
+        search_scope[sizeof(search_scope)-1] = '\0';
+        search_kbd_active = true;
+        goto input_done;
+    }
+
     /* SELECT: open core picker. On a ROM file → per-game override; on a system
      * folder → per-folder override. Not available in recents/favourites views. */
-    if (input_was_pressed(FROG_BTN_SELECT) && !viewing_recents && !viewing_favourites &&
+    if (input_was_pressed(FROG_BTN_SELECT) && !viewing_recents && !viewing_favourites && !viewing_search &&
         selected_index < entry_count &&
         strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
         strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
@@ -807,7 +962,9 @@ static void handle_input(void) {
     }
 
     if (input_was_pressed(FROG_BTN_A) && selected_index < entry_count) {
-        if (viewing_favourites) {
+        if (viewing_search) {
+            search_launch(selected_index);
+        } else if (viewing_favourites) {
             /* Launch from favourites list */
             const FavoriteGame *fl = favorites_get_list();
             int fc = favorites_get_count();
@@ -902,7 +1059,11 @@ static void handle_input(void) {
     }
 
     if (input_was_pressed(FROG_BTN_B)) {
-        if (viewing_recents || viewing_favourites) {
+        if (viewing_search) {
+            /* back to the keyboard to refine the query */
+            viewing_search = false;
+            search_kbd_active = true;
+        } else if (viewing_recents || viewing_favourites) {
             viewing_recents = false;
             viewing_favourites = false;
             scan_directory(ROMS_PATH);
@@ -1080,7 +1241,7 @@ static void render_settings_menu(void) {
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y4, "Button Mapping", COLOR_TEXT);
     }
-    render_legend(framebuffer, LEGEND_X_NONE, 0);
+    render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
 
 static void render_remap_wizard(void) {
@@ -1123,7 +1284,35 @@ static void render_core_picker(void) {
         else
             font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, ry, line, COLOR_TEXT);
     }
-    render_legend(framebuffer, LEGEND_X_NONE, 0);
+    render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
+}
+
+static void render_search_kbd(void) {
+    render_clear_screen(framebuffer);
+    render_header(framebuffer, "SEARCH");
+
+    int y = START_Y;
+    char q[96];
+    snprintf(q, sizeof(q), "> %s_", search_query);
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, q, COLOR_TEXT);
+    y += ITEM_HEIGHT + UI_S(8);
+
+    int cw = UI_S(26), ch = ITEM_HEIGHT;
+    for (int r = 0; r < KBD_NROWS; r++) {
+        int rl = kbd_row_len(r);
+        int ry = y + r * ch;
+        for (int c = 0; c < rl; c++) {
+            char lbl[8];
+            int cx;
+            if (r == KBD_SPECIAL_ROW) { snprintf(lbl, sizeof(lbl), "%s", KBD_SPECIAL[c]); cx = PADDING + c * (cw * 3); }
+            else { lbl[0] = KBD_ROWS[r][c]; lbl[1] = '\0'; cx = PADDING + c * cw; }
+            if (r == search_kbd_r && c == search_kbd_c)
+                render_text_pillbox(framebuffer, cx, ry, lbl, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+            else
+                font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, cx, ry, lbl, COLOR_TEXT);
+        }
+    }
+    render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
 
 void retro_run(void) {
@@ -1163,7 +1352,9 @@ void retro_run(void) {
         }
     }
 
-    if (core_picker_active) {
+    if (search_kbd_active) {
+        render_search_kbd();
+    } else if (core_picker_active) {
         render_core_picker();
     } else if (remap_wizard_active) {
         render_remap_wizard();
@@ -1174,10 +1365,17 @@ void retro_run(void) {
             banner_render(framebuffer);
         else
             render_clear_screen(framebuffer);
-        const char *title = viewing_recents    ? "RECENT GAMES" :
-                            viewing_favourites ? "FAVOURITES" :
-                            (strcmp(current_path, ROMS_PATH) == 0)
-                            ? "TREEFROGUI: SYSTEMS" : get_basename(current_path);
+        static char search_title[96];
+        const char *title;
+        if (viewing_search) {
+            snprintf(search_title, sizeof(search_title), "SEARCH: %s (%d)", search_query, entry_count);
+            title = search_title;
+        } else {
+            title = viewing_recents    ? "RECENT GAMES" :
+                    viewing_favourites ? "FAVOURITES" :
+                    (strcmp(current_path, ROMS_PATH) == 0)
+                    ? "TREEFROGUI: SYSTEMS" : get_basename(current_path);
+        }
         render_header(framebuffer, title);
         int visible = min(entry_count - scroll_offset, VISIBLE_ENTRIES);
         for (int i = 0; i < visible; i++) {
@@ -1209,12 +1407,14 @@ void retro_run(void) {
         }
         /* SELECT opens the core picker on folders + real ROMs (matches the SELECT
          * handler guard): show the "SEL-OPTIONS" hint there. */
-        int show_select = (!viewing_recents && !viewing_favourites &&
+        int show_select = (!viewing_recents && !viewing_favourites && !viewing_search &&
                            selected_index < entry_count &&
                            strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
                            strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
                            strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0);
-        render_legend(framebuffer, legend_mode, show_select);
+        /* X opens search in the normal browser (systems root + any game folder). */
+        int show_search = (!viewing_recents && !viewing_favourites && !viewing_search);
+        render_legend(framebuffer, legend_mode, show_select, show_search);
     }
 
     if (video_cb)

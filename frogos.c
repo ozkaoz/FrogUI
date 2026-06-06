@@ -1163,7 +1163,7 @@ static void render_menu() {
         // In ROM directories, show "X - FAVOURITE"
         x_button_mode = LEGEND_X_FAVOURITE;
     }
-    render_legend(framebuffer, x_button_mode, 0);
+    render_legend(framebuffer, x_button_mode, 0, 0);
 
     // Draw the "current entry/total entries" label in top-right, above the legend
     char entry_label[20];

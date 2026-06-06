@@ -81,7 +81,7 @@ void render_header(uint16_t *framebuffer, const char *title);
 #define LEGEND_X_REMOVE    2
 
 // Draw menu legend at bottom
-void render_legend(uint16_t *framebuffer, int x_button_mode, int show_select);
+void render_legend(uint16_t *framebuffer, int x_button_mode, int show_select, int show_search);
 
 // Draw a menu item (file or folder)
 void render_menu_item(uint16_t *framebuffer, int index, const char *name, int is_dir,

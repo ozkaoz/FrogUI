@@ -347,7 +347,7 @@ static void render_screen(void) {
                          is_selected, scroll_offset, 0);
     }
 
-    render_legend(framebuffer, LEGEND_X_NONE, 0);
+    render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
     fbdev_blit(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
