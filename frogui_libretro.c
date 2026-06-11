@@ -131,7 +131,8 @@ static const ConsoleMapping console_mappings[] = {
     {"cdg",    CORES_PATH "/pocketcdg_libretro.so"},
     {"chip8",  CORES_PATH "/jaxe_libretro.so"},
     {"retro8", CORES_PATH "/retro8_libretro.so"},
-    {"arduboy",CORES_PATH "/arduous_libretro.so"},
+    {"arduboy",CORES_PATH "/ardens_libretro.so"},   /* default: Ardens (fast custom AVR core) */
+    {"arduous",CORES_PATH "/arduous_libretro.so"},   /* alt: simavr-based arduous (cycle-accurate, slower) */
     {"vec",    CORES_PATH "/vecx_libretro.so"},
     {"thom",   CORES_PATH "/theodore_libretro.so"},
     {"o2em",   CORES_PATH "/o2em_libretro.so"},
