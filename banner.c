@@ -10,7 +10,8 @@ static uint16_t *banner_buf = NULL;   /* current (target) banner */
 static uint16_t *banner_prev = NULL;  /* outgoing banner during crossfade */
 static int banner_loaded = 0;
 static int banner_anim = 1;           /* crossfade enabled */
-static int fade_alpha = 256;          /* 0..256: 256 = fully showing current */
+#define FADE_FRAMES 20                /* ~330ms @ 60fps — slow, iPhone-like */
+static int fade_frame = FADE_FRAMES;  /* 0..FADE_FRAMES; FADE_FRAMES = done */
 
 static inline uint16_t rgb_to_565(unsigned char r, unsigned char g, unsigned char b) {
     return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
@@ -29,7 +30,7 @@ static inline uint16_t blend565(uint16_t a, uint16_t b, int t) {
 
 void banner_set_anim(int enabled) {
     banner_anim = enabled ? 1 : 0;
-    if (!banner_anim) fade_alpha = 256;
+    if (!banner_anim) fade_frame = FADE_FRAMES;
 }
 
 void banner_load(const char *path) {
@@ -55,12 +56,12 @@ void banner_load(const char *path) {
             banner_prev = malloc(sw * sh * sizeof(uint16_t));
         if (banner_prev) {
             memcpy(banner_prev, banner_buf, sw * sh * sizeof(uint16_t));
-            fade_alpha = 0;
+            fade_frame = 0;
         } else {
-            fade_alpha = 256;
+            fade_frame = FADE_FRAMES;
         }
     } else {
-        fade_alpha = 256;
+        fade_frame = FADE_FRAMES;
     }
 
     for (int y = 0; y < sh; y++) {
@@ -78,27 +79,30 @@ void banner_load(const char *path) {
 
 void banner_clear(void) {
     banner_loaded = 0;
-    fade_alpha = 256;
+    fade_frame = FADE_FRAMES;
 }
 
 void banner_render(uint16_t *framebuffer) {
     if (!banner_loaded || !banner_buf || !framebuffer) return;
     int n = SCREEN_WIDTH * SCREEN_HEIGHT;
 
-    if (fade_alpha >= 256 || !banner_prev) {
+    if (fade_frame >= FADE_FRAMES || !banner_prev) {
         memcpy(framebuffer, banner_buf, n * sizeof(uint16_t));
         return;
     }
 
-    int t = fade_alpha;
+    /* Advance one frame, ease-in-out (smoothstep) for a slow, soft iPhone-like
+     * crossfade. p: 0..1 progress; e = 3p²−2p³. Only the background animates —
+     * the selection/text is drawn separately and updates immediately. */
+    fade_frame++;
+    float p = (float)fade_frame / (float)FADE_FRAMES;
+    if (p > 1.0f) p = 1.0f;
+    float e = p * p * (3.0f - 2.0f * p);
+    int t = (int)(e * 256.0f + 0.5f);
+    if (t > 256) t = 256;
+
     for (int i = 0; i < n; i++)
         framebuffer[i] = blend565(banner_prev[i], banner_buf[i], t);
-
-    /* ease-out: snappy start, soft finish (iPhone-like). ~3 frames. */
-    int step = (256 - fade_alpha) / 2;
-    if (step < 96) step = 96;
-    fade_alpha += step;
-    if (fade_alpha > 256) fade_alpha = 256;
 }
 
 int banner_is_loaded(void) {

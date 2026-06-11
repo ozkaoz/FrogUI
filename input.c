@@ -83,22 +83,35 @@ void input_deinit(void) {
 
 /* Right-stick directions reach us as the A/B/X/Y bits (cubevol merges the analog
  * stick into the same GPIO matrix bits as the face buttons — no separable signal
- * anywhere). We can't tell a real press from a sustained stick deflection, but we
- * CAN drop accidental drift: brief sub-frame chatter as the stick crosses the
- * threshold. Require the face bits (0xF000 = X/A/B/Y) to be stable for 2 frames
- * before committing. Real taps (>=50ms) pass; 1-frame blips are filtered. Dpad
- * and the rest stay instant. */
+ * anywhere). In games that's fine (stick acts like the buttons), but in menus the
+ * stick's drift and accidental brushes fire false A/B/X/Y. We can't tell a real
+ * press from the stick (same bits), so we debounce: a face bit must stay set for
+ * FACE_HOLD consecutive frames before it registers. Drift glances and quick
+ * brushes (shorter than that) are dropped; a deliberate tap/hold passes with a
+ * small latency. Release clears instantly. Dpad and the rest stay instant.
+ * This runs only in the FrogUI menu (games read the shm directly), so in-game
+ * response is unaffected. */
 #define FACE_BITS 0xF000u
+#define FACE_HOLD 4   /* frames (~65ms @ 60fps) a face bit must be held to count */
 
 void input_update(void) {
     if (!cubevol_keys) return;
     uint32_t raw = *cubevol_keys & 0xFFFF;
 
-    static uint32_t last_raw = 0, stable_face = 0;
-    uint32_t face = raw & FACE_BITS;
-    if ((last_raw & FACE_BITS) == face) stable_face = face;  /* stable 2 frames */
-    last_raw = raw;
-    raw = (raw & ~FACE_BITS) | stable_face;
+    /* Per-bit hold debounce on the face bits (X=12/A=13/B=14/Y=15). */
+    static uint8_t face_cnt[16] = {0};
+    static uint32_t committed_face = 0;
+    for (int b = 12; b <= 15; b++) {
+        uint32_t m = 1u << b;
+        if (raw & m) {
+            if (face_cnt[b] < 255) face_cnt[b]++;
+            if (face_cnt[b] >= FACE_HOLD) committed_face |= m;
+        } else {
+            face_cnt[b] = 0;
+            committed_face &= ~m;
+        }
+    }
+    raw = (raw & ~FACE_BITS) | (committed_face & FACE_BITS);
 
     prev_state = current_state;
     uint32_t s = 0;

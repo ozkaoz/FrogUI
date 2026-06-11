@@ -121,7 +121,8 @@ static const ConsoleMapping console_mappings[] = {
     {"gw",     CORES_PATH "/gw_libretro.so"},
     {"jnb",    CORES_PATH "/jumpnbump_libretro.so"},
     /* Misc */
-    {"fake08", CORES_PATH "/fake08_libretro.so"},
+    {"pico8",  CORES_PATH "/fake08_libretro.so"},   /* PICO-8 (fake08 core) */
+    {"fake08", CORES_PATH "/fake08_libretro.so"},   /* legacy folder name */
     {"lowres-nx", CORES_PATH "/lowresnx_libretro.so"},
     {"gme",    CORES_PATH "/gme_libretro.so"},
     {"m2k",    CORES_PATH "/mame2000_libretro.so"},
@@ -390,15 +391,17 @@ static int settings_filter_idx = 1;     /* forced bilinear (option removed from 
 static int settings_filter_idx_on_enter = 0;  /* snapshot for restart-on-change */
 static int settings_auto_resume = 0;    /* 0=off, 1=on */
 static int settings_anim = 1;           /* UI animations: 0=off, 1=on */
+static int settings_hide_empty = 0;     /* hide rom folders with no games: 0=off, 1=on */
 static const char *filter_names[] = {"nearest", "bilinear"};
 static const char *onoff_names[] = {"off", "on"};
 #define FILTER_COUNT 2
 #define SETTINGS_BRIGHTNESS_STEP 5
 /* Filter option removed from the menu — always bilinear (HW path). */
-#define SETTINGS_ROW_COUNT 6
+#define SETTINGS_ROW_COUNT 7
 #define SETTINGS_ROW_AUTORESUME 3
 #define SETTINGS_ROW_ANIM 4
-#define SETTINGS_ROW_REMAP 5
+#define SETTINGS_ROW_HIDEEMPTY 5
+#define SETTINGS_ROW_REMAP 6
 
 static bool remap_wizard_active = false;
 static int  remap_step = 0;
@@ -452,6 +455,8 @@ static void settings_load_file(void) {
             settings_anim = (strcmp(val, "off") == 0) ? 0 : 1;
         } else if (strcmp(line, "auto_resume") == 0) {
             settings_auto_resume = (strcmp(val, "on") == 0) ? 1 : 0;
+        } else if (strcmp(line, "hide_empty") == 0) {
+            settings_hide_empty = (strcmp(val, "on") == 0) ? 1 : 0;
         }
     }
     fclose(f);
@@ -468,6 +473,7 @@ static void settings_save_file(void) {
     fprintf(f, "filter=%s\n", filter_names[settings_filter_idx]);
     fprintf(f, "auto_resume=%s\n", onoff_names[settings_auto_resume]);
     fprintf(f, "animations=%s\n", onoff_names[settings_anim]);
+    fprintf(f, "hide_empty=%s\n", onoff_names[settings_hide_empty]);
     fflush(f);
     fsync(fileno(f));
     fclose(f);
@@ -537,6 +543,37 @@ static void load_banner_for_view(const char *path, bool is_recents, bool is_favo
     banner_clear();
 }
 
+/* True if `path` contains at least one game (any file that isn't artwork/metadata),
+ * recursing into subfolders. Used to hide empty rom folders. Bounded depth. */
+static int folder_has_games(const char *path, int depth) {
+    if (depth > 3) return 0;
+    DIR *d = opendir(path);
+    if (!d) return 0;
+    struct dirent *e;
+    int found = 0;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        char full[MAX_PATH_LEN];
+        snprintf(full, sizeof(full), "%s/%s", path, e->d_name);
+        struct stat st;
+        if (stat(full, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            if (folder_has_games(full, depth + 1)) { found = 1; break; }
+        } else {
+            size_t nlen = strlen(e->d_name);
+            int is_p8png = nlen >= 7 && strcasecmp(e->d_name + nlen - 7, ".p8.png") == 0;
+            const char *ext = strrchr(e->d_name, '.');
+            if (ext && !is_p8png &&
+                (strcasecmp(ext,".csv")==0 || strcasecmp(ext,".txt")==0 ||
+                 strcasecmp(ext,".xml")==0 || strcasecmp(ext,".jpg")==0 ||
+                 strcasecmp(ext,".png")==0)) continue;
+            found = 1; break;
+        }
+    }
+    closedir(d);
+    return found;
+}
+
 static void scan_directory(const char *path) {
     DIR *dir = opendir(path);
     if (!dir) return;
@@ -558,6 +595,12 @@ static void scan_directory(const char *path) {
                         strcasecmp(ext,".xml")==0 || strcasecmp(ext,".jpg")==0 ||
                         strcasecmp(ext,".png")==0)) continue;
         }
+        /* Always hide the internal "menu" folder at the root. */
+        if (S_ISDIR(st.st_mode) && strcmp(path, ROMS_PATH) == 0 &&
+            strcasecmp(e->d_name, "menu") == 0) continue;
+        /* Hide-empty-folders: at the root, skip rom folders with no games. */
+        if (S_ISDIR(st.st_mode) && settings_hide_empty &&
+            strcmp(path, ROMS_PATH) == 0 && !folder_has_games(full, 0)) continue;
         if (entry_count >= entry_capacity) {
             entry_capacity = entry_capacity ? entry_capacity*2 : INITIAL_ENTRIES_CAPACITY;
             entries = realloc(entries, entry_capacity * sizeof(DirEntry));
@@ -872,6 +915,8 @@ static void handle_input(void) {
                 settings_auto_resume = (settings_auto_resume + delta + 2) % 2;
             } else if (settings_menu_idx == SETTINGS_ROW_ANIM) {
                 settings_anim = (settings_anim + delta + 2) % 2;
+            } else if (settings_menu_idx == SETTINGS_ROW_HIDEEMPTY) {
+                settings_hide_empty = (settings_hide_empty + delta + 2) % 2;
             }
             settings_apply();
         }
@@ -886,6 +931,10 @@ static void handle_input(void) {
              input_was_pressed(FROG_BTN_B)) {
             settings_save_file();
             settings_menu_active = false;
+            /* re-scan root so a hide-empty-folders change takes effect now */
+            scan_directory(ROMS_PATH);
+            strncpy(current_path, ROMS_PATH, MAX_PATH_LEN-1);
+            selected_index = 0; scroll_offset = 0;
         }
         return;
     }
@@ -1252,12 +1301,20 @@ static void render_settings_menu(void) {
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y4, line, COLOR_TEXT);
     }
-    /* Button Mapping row */
+    /* Hide empty folders row */
+    snprintf(line, sizeof(line), "Hide Empty Folders: < %s >", onoff_names[settings_hide_empty]);
     int y5 = y4 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_REMAP) {
-        render_text_pillbox(framebuffer, PADDING, y5, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    if (settings_menu_idx == SETTINGS_ROW_HIDEEMPTY) {
+        render_text_pillbox(framebuffer, PADDING, y5, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y5, "Button Mapping", COLOR_TEXT);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y5, line, COLOR_TEXT);
+    }
+    /* Button Mapping row */
+    int y6 = y5 + ITEM_HEIGHT;
+    if (settings_menu_idx == SETTINGS_ROW_REMAP) {
+        render_text_pillbox(framebuffer, PADDING, y6, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    } else {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y6, "Button Mapping", COLOR_TEXT);
     }
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
