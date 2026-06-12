@@ -37,6 +37,7 @@
 #define ROMS_PATH    SDCARD_BASE "/roms"
 #define LAUNCH_FILE  "/tmp/frogui_launch.txt"
 #define PCSX4ALL_BIN SDCARD_BASE "/cubegm/pcsx4all"
+#define PICO286_BIN  SDCARD_BASE "/cubegm/pico286"
 
 /* Console → core mapping (folder name → libretro .so)
  * Folder names match /mnt/sdcard/roms/ subdirectories (gb300_multicore convention). */
@@ -122,6 +123,7 @@ static const ConsoleMapping console_mappings[] = {
     {"jnb",    CORES_PATH "/jumpnbump_libretro.so"},
     /* Misc */
     {"pico8",  CORES_PATH "/fake08_libretro.so"},   /* PICO-8 (fake08 core) */
+    {"pico286", PICO286_BIN},                        /* DOS PC (standalone, launched directly) */
     {"fake08", CORES_PATH "/fake08_libretro.so"},   /* legacy folder name */
     {"lowres-nx", CORES_PATH "/lowresnx_libretro.so"},
     {"gme",    CORES_PATH "/gme_libretro.so"},
@@ -705,6 +707,16 @@ static bool is_ps1_folder(const char *folder) {
            strcasecmp(folder, "PS")  == 0;
 }
 
+static bool is_pico286_folder(const char *folder) {
+    return folder && strcasecmp(folder, "pico286") == 0;
+}
+
+/* A standalone-launched binary (run directly, not as a libretro core). */
+static bool is_standalone_bin(const char *name) {
+    return name && (strcmp(name, PCSX4ALL_BIN) == 0 ||
+                    strcmp(name, PICO286_BIN)  == 0);
+}
+
 /* ----------------------------- Search (X button) ----------------------------- */
 
 /* On-screen keyboard layout. Rows 0-3 are character keys; row 4 is special. */
@@ -799,6 +811,8 @@ static void search_launch(int idx) {
     else if (core) {
         if (is_ps1_folder(folder) && access(PCSX4ALL_BIN, F_OK) == 0)
             request_standalone_launch(PCSX4ALL_BIN, path);
+        else if (is_pico286_folder(folder) && access(PICO286_BIN, F_OK) == 0)
+            request_standalone_launch(PICO286_BIN, path);
         else
             request_game_launch(core, path);
     } else {
@@ -1028,7 +1042,7 @@ static void handle_input(void) {
             const FavoriteGame *fl = favorites_get_list();
             int fc = favorites_get_count();
             if (selected_index < fc) {
-                if (strcmp(fl[selected_index].core_name, PCSX4ALL_BIN) == 0)
+                if (is_standalone_bin(fl[selected_index].core_name))
                     request_standalone_launch(fl[selected_index].core_name,
                                               fl[selected_index].full_path);
                 else
@@ -1040,7 +1054,7 @@ static void handle_input(void) {
             const RecentGame *rg = recent_games_get_list();
             int rc = recent_games_get_count();
             if (selected_index < rc) {
-                if (strcmp(rg[selected_index].core_name, PCSX4ALL_BIN) == 0)
+                if (is_standalone_bin(rg[selected_index].core_name))
                     request_standalone_launch(rg[selected_index].core_name,
                                               rg[selected_index].full_path);
                 else
@@ -1108,6 +1122,8 @@ static void handle_input(void) {
                 } else if (core) {
                     if (is_ps1_folder(folder) && access(PCSX4ALL_BIN, F_OK) == 0)
                         request_standalone_launch(PCSX4ALL_BIN, rom_path);
+                    else if (is_pico286_folder(folder) && access(PICO286_BIN, F_OK) == 0)
+                        request_standalone_launch(PICO286_BIN, rom_path);
                     else
                         request_game_launch(core, rom_path);
                 } else {
