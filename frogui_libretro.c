@@ -128,6 +128,9 @@ static const ConsoleMapping console_mappings[] = {
     {"lowres-nx", CORES_PATH "/lowresnx_libretro.so"},
     {"gme",    CORES_PATH "/gme_libretro.so"},
     {"m2k",    CORES_PATH "/mame2000_libretro.so"},
+    {"cps1",   CORES_PATH "/fbalpha2012_cps1_libretro.so"},    /* Capcom CPS-1 (FBA 2012) */
+    {"cps2",   CORES_PATH "/fbalpha2012_cps2_libretro.so"},    /* Capcom CPS-2 (FBA 2012) */
+    {"neogeo", CORES_PATH "/fbalpha2012_neogeo_libretro.so"},  /* Neo Geo (FBA 2012) */
     {"pokem",  CORES_PATH "/pokemini_libretro.so"},
     {"int",    CORES_PATH "/freeintv_libretro.so"},
     {"fcf",    CORES_PATH "/freechaf_libretro.so"},
