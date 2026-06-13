@@ -660,7 +660,21 @@ done:
     scroll_offset  = 0;
 }
 
+/* Hand the active theme's colors to picoarch so its in-game menu matches FrogUI.
+ * picoarch reads <exe_dir>/skin/skin.txt (text_color/selection_color). */
+static void write_picoarch_skin(void) {
+    extern uint16_t theme_text(void);
+    extern uint16_t theme_select_bg(void);
+    mkdir("/mnt/sdcard/cubegm/skin", 0777);
+    FILE *s = fopen("/mnt/sdcard/cubegm/skin/skin.txt", "w");
+    if (!s) return;
+    fprintf(s, "text_color=0x%04X\n", theme_text());
+    fprintf(s, "selection_color=0x%04X\n", theme_select_bg());
+    fclose(s);
+}
+
 static void request_game_launch(const char *core_path, const char *rom_path) {
+    write_picoarch_skin();
     FILE *f = fopen(LAUNCH_FILE, "w");
     if (!f) { dbg("failed to write launch file"); return; }
     fprintf(f, "%s\n%s\n", core_path, rom_path);
