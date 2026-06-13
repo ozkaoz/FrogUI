@@ -661,15 +661,27 @@ done:
 }
 
 /* Hand the active theme's colors to picoarch so its in-game menu matches FrogUI.
- * picoarch reads <exe_dir>/skin/skin.txt (text_color/selection_color). */
+ * picoarch reads <exe_dir>/skin/skin.txt; its parser expects 24-bit RGB888 hex
+ * (it converts to RGB565), so expand our RGB565 theme colors to RGB888. */
+static unsigned rgb565_to_888(uint16_t c) {
+    unsigned r5 = (c >> 11) & 0x1F, g6 = (c >> 5) & 0x3F, b5 = c & 0x1F;
+    unsigned r8 = (r5 << 3) | (r5 >> 2);
+    unsigned g8 = (g6 << 2) | (g6 >> 4);
+    unsigned b8 = (b5 << 3) | (b5 >> 2);
+    return (r8 << 16) | (g8 << 8) | b8;
+}
 static void write_picoarch_skin(void) {
     extern uint16_t theme_text(void);
+    extern uint16_t theme_select_text(void);
     extern uint16_t theme_select_bg(void);
     mkdir("/mnt/sdcard/cubegm/skin", 0777);
     FILE *s = fopen("/mnt/sdcard/cubegm/skin/skin.txt", "w");
     if (!s) return;
-    fprintf(s, "text_color=0x%04X\n", theme_text());
-    fprintf(s, "selection_color=0x%04X\n", theme_select_bg());
+    /* Match FrogUI: normal rows in theme text colour, selected row = select-text
+     * on the select-bg pill. */
+    fprintf(s, "text_color=0x%06X\n",     rgb565_to_888(theme_text()));
+    fprintf(s, "selection_color=0x%06X\n", rgb565_to_888(theme_select_bg()));
+    fprintf(s, "sel_text_color=0x%06X\n",  rgb565_to_888(theme_select_text()));
     fclose(s);
 }
 
