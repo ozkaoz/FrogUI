@@ -129,6 +129,7 @@ static const ConsoleMapping console_mappings[] = {
     {"pico286", PICO286_BIN},                        /* DOS PC (standalone, launched directly) */
     {"fake08", CORES_PATH "/fake08_libretro.so"},   /* legacy folder name */
     {"lowres-nx", CORES_PATH "/lowresnx_libretro.so"},
+    {"tic80",  CORES_PATH "/tic80_libretro.so"},   /* TIC-80 fantasy console (.tic carts) */
     {"gme",    CORES_PATH "/gme_libretro.so"},
     {"m2k",    CORES_PATH "/mame2000_libretro.so"},
     {"cps1",   CORES_PATH "/fbalpha2012_cps1_libretro.so"},    /* Capcom CPS-1 (FBA 2012) */
