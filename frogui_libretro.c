@@ -402,17 +402,19 @@ static int settings_auto_resume = 0;    /* 0=off, 1=on */
 static int settings_anim = 1;           /* UI animations: 0=off, 1=on */
 static int settings_hide_empty = 0;     /* hide rom folders with no games: 0=off, 1=on */
 static int settings_game_switcher = 0;  /* recents as box-art carousel: 0=off, 1=on */
+static int settings_load_recents = 0;   /* start FrogUI in the recents view: 0=off, 1=on */
 static const char *filter_names[] = {"nearest", "bilinear"};
 static const char *onoff_names[] = {"off", "on"};
 #define FILTER_COUNT 2
 #define SETTINGS_BRIGHTNESS_STEP 5
 /* Filter option removed from the menu — always bilinear (HW path). */
-#define SETTINGS_ROW_COUNT 8
+#define SETTINGS_ROW_COUNT 9
 #define SETTINGS_ROW_AUTORESUME 3
 #define SETTINGS_ROW_ANIM 4
 #define SETTINGS_ROW_HIDEEMPTY 5
 #define SETTINGS_ROW_SWITCHER 6
-#define SETTINGS_ROW_REMAP 7
+#define SETTINGS_ROW_LOADRECENTS 7
+#define SETTINGS_ROW_REMAP 8
 
 static bool remap_wizard_active = false;
 static int  remap_step = 0;
@@ -470,6 +472,8 @@ static void settings_load_file(void) {
             settings_hide_empty = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "game_switcher") == 0) {
             settings_game_switcher = (strcmp(val, "on") == 0) ? 1 : 0;
+        } else if (strcmp(line, "load_recents") == 0) {
+            settings_load_recents = (strcmp(val, "on") == 0) ? 1 : 0;
         }
     }
     fclose(f);
@@ -488,6 +492,7 @@ static void settings_save_file(void) {
     fprintf(f, "animations=%s\n", onoff_names[settings_anim]);
     fprintf(f, "hide_empty=%s\n", onoff_names[settings_hide_empty]);
     fprintf(f, "game_switcher=%s\n", onoff_names[settings_game_switcher]);
+    fprintf(f, "load_recents=%s\n", onoff_names[settings_load_recents]);
     fflush(f);
     fsync(fileno(f));
     fclose(f);
@@ -700,7 +705,10 @@ static int switcher_savestate_bmp(const char *full_path, char *out, size_t n) {
     *sl = 0;
     char *tagsl = strrchr(dir, '/'); const char *tag = tagsl ? tagsl + 1 : dir;
     char *dot = strrchr(base, '.'); if (dot) *dot = 0;     /* strip extension */
-    for (int slot = 9; slot >= 0; slot--) {                 /* prefer auto-resume slot 9 */
+    /* dedicated per-game last-screen snapshot (written on exit) first */
+    snprintf(out, n, "/mnt/sdcard/picoarch/%s/%s.scr.bmp", tag, base);
+    if (access(out, F_OK) == 0) return 1;
+    for (int slot = 9; slot >= 0; slot--) {                 /* then save states, prefer slot 9 */
         snprintf(out, n, "/mnt/sdcard/picoarch/%s/%s.st%d.bmp", tag, base, slot);
         if (access(out, F_OK) == 0) return 1;
     }
@@ -773,6 +781,28 @@ static void render_game_switcher(uint16_t *framebuffer) {
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, ny + UI_S(22), pos, COLOR_TEXT);
 
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
+}
+
+/* Switch the browser into the recents view (used by the Recents entry and, when
+ * "Start in Recents" is on, at startup). */
+static void enter_recents_view(void) {
+    const RecentGame *rg = recent_games_get_list();
+    int rc = recent_games_get_count();
+    while (rc > entry_capacity) {
+        entry_capacity = entry_capacity ? entry_capacity*2 : INITIAL_ENTRIES_CAPACITY;
+        DirEntry *ne = realloc(entries, entry_capacity * sizeof(DirEntry));
+        if (!ne) return;
+        entries = ne;
+    }
+    entry_count = 0;
+    for (int i = 0; i < rc; i++) {
+        strncpy(entries[entry_count].name, rg[i].game_name, 255);
+        entries[entry_count].name[255] = '\0';
+        entries[entry_count].is_dir = 0;
+        entry_count++;
+    }
+    viewing_recents = true;
+    selected_index = 0; scroll_offset = 0;
 }
 
 /* Hand the active theme's colors to picoarch so its in-game menu matches FrogUI.
@@ -1074,6 +1104,8 @@ static void handle_input(void) {
                 settings_hide_empty = (settings_hide_empty + delta + 2) % 2;
             } else if (settings_menu_idx == SETTINGS_ROW_SWITCHER) {
                 settings_game_switcher = (settings_game_switcher + delta + 2) % 2;
+            } else if (settings_menu_idx == SETTINGS_ROW_LOADRECENTS) {
+                settings_load_recents = (settings_load_recents + delta + 2) % 2;
             }
             settings_apply();
         }
@@ -1223,23 +1255,7 @@ static void handle_input(void) {
             viewing_favourites = true;
             selected_index = 0; scroll_offset = 0;
         } else if (strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) == 0) {
-            /* Enter recents view */
-            const RecentGame *rg = recent_games_get_list();
-            int rc = recent_games_get_count();
-            while (rc > entry_capacity) {
-                entry_capacity = entry_capacity ? entry_capacity*2 : INITIAL_ENTRIES_CAPACITY;
-                entries = realloc(entries, entry_capacity * sizeof(DirEntry));
-                if (!entries) goto input_done;
-            }
-            entry_count = 0;
-            for (int i = 0; i < rc; i++) {
-                strncpy(entries[entry_count].name, rg[i].game_name, 255);
-                entries[entry_count].name[255] = '\0';
-                entries[entry_count].is_dir = 0;
-                entry_count++;
-            }
-            viewing_recents = true;
-            selected_index = 0; scroll_offset = 0;
+            enter_recents_view();
         } else if (entries[selected_index].is_dir) {
             char new_path[MAX_PATH_LEN];
             snprintf(new_path, sizeof(new_path), "%s/%s", current_path, entries[selected_index].name);
@@ -1393,6 +1409,8 @@ void retro_init(void) {
     dbg("render_init done");
     scan_directory(current_path);
     dbg("scan_directory done");
+    if (settings_load_recents && recent_games_get_count() > 0)
+        enter_recents_view();   /* "Start in Recents" setting */
     shutdown_requested = false;
     dbg("retro_init complete");
 }
@@ -1476,12 +1494,20 @@ static void render_settings_menu(void) {
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y6, line, COLOR_TEXT);
     }
-    /* Button Mapping row */
+    /* Load to recents row */
+    snprintf(line, sizeof(line), "Start in Recents: < %s >", onoff_names[settings_load_recents]);
     int y7 = y6 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_REMAP) {
-        render_text_pillbox(framebuffer, PADDING, y7, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    if (settings_menu_idx == SETTINGS_ROW_LOADRECENTS) {
+        render_text_pillbox(framebuffer, PADDING, y7, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y7, "Button Mapping", COLOR_TEXT);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y7, line, COLOR_TEXT);
+    }
+    /* Button Mapping row */
+    int y8 = y7 + ITEM_HEIGHT;
+    if (settings_menu_idx == SETTINGS_ROW_REMAP) {
+        render_text_pillbox(framebuffer, PADDING, y8, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    } else {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y8, "Button Mapping", COLOR_TEXT);
     }
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
