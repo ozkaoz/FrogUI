@@ -742,10 +742,11 @@ static void render_game_switcher(uint16_t *framebuffer) {
     if (selected_index >= n) selected_index = n - 1;
     const RecentGame *g = &list[selected_index];
 
-    int bw = SCREEN_WIDTH * 6 / 10, bh = SCREEN_HEIGHT * 52 / 100;
-    int bx = (SCREEN_WIDTH - bw) / 2, by = HEADER_HEIGHT + UI_S(14);
-    render_fill_rect(framebuffer, bx - 2, by - 2, bw + 4, bh + 4, 0x39E7);
-    render_fill_rect(framebuffer, bx, by, bw, bh, 0x2104);
+    /* Full-screen art: fills from below the header to the bottom info bar. */
+    int barh = UI_S(30);
+    int bx = 0, by = HEADER_HEIGHT;
+    int bw = SCREEN_WIDTH, bh = SCREEN_HEIGHT - HEADER_HEIGHT - barh;
+    render_fill_rect(framebuffer, bx, by, bw, bh, 0x0000);
 
     int drawn = 0;
     char path[1024];
@@ -773,12 +774,24 @@ static void render_game_switcher(uint16_t *framebuffer) {
     }
     if (!drawn)
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, bx + UI_S(16), by + bh/2,
-                       "(no art)", COLOR_TEXT);
+                       "(no screenshot - open the in-game menu once)", COLOR_TEXT);
 
-    int ny = by + bh + UI_S(10);
-    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, ny, g->display_name, COLOR_TEXT);
-    char pos[48]; snprintf(pos, sizeof pos, "< %d / %d >", selected_index + 1, n);
-    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, ny + UI_S(22), pos, COLOR_TEXT);
+    /* Bottom info bar: game title (left) + position / play time (right). */
+    int byb = SCREEN_HEIGHT - barh;
+    render_fill_rect(framebuffer, 0, byb, SCREEN_WIDTH, barh, 0x2104);
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, byb + UI_S(8),
+                   g->display_name, COLOR_TEXT);
+    char info[96];
+    long secs = playtime_lookup(g->full_path);
+    if (secs >= 3600)
+        snprintf(info, sizeof info, "%d/%d   %ldh %ldm", selected_index + 1, n, secs/3600, (secs%3600)/60);
+    else if (secs >= 60)
+        snprintf(info, sizeof info, "%d/%d   %ldm", selected_index + 1, n, secs/60);
+    else
+        snprintf(info, sizeof info, "%d/%d", selected_index + 1, n);
+    int iw = (int)strlen(info) * UI_S(8);
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH - iw - PADDING, byb + UI_S(8),
+                   info, COLOR_TEXT);
 
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
@@ -1317,14 +1330,25 @@ static void handle_input(void) {
         if (selected_index >= scroll_offset + VISIBLE_ENTRIES)
             scroll_offset = selected_index - VISIBLE_ENTRIES + 1;
     }
+    /* In the game switcher (one game on screen at a time), Left/Right step one
+     * game like Up/Down — no page jumping. */
+    bool switcher = viewing_recents && settings_game_switcher;
     if (input_was_pressed(FROG_BTN_LEFT)) {
-        selected_index = (selected_index >= VISIBLE_ENTRIES) ? selected_index - VISIBLE_ENTRIES : 0;
-        if (selected_index < scroll_offset) scroll_offset = selected_index;
+        if (switcher) {
+            if (selected_index > 0) selected_index--;
+        } else {
+            selected_index = (selected_index >= VISIBLE_ENTRIES) ? selected_index - VISIBLE_ENTRIES : 0;
+            if (selected_index < scroll_offset) scroll_offset = selected_index;
+        }
     }
     if (input_was_pressed(FROG_BTN_RIGHT)) {
-        selected_index = (selected_index + VISIBLE_ENTRIES < entry_count) ? selected_index + VISIBLE_ENTRIES : entry_count - 1;
-        if (selected_index >= scroll_offset + VISIBLE_ENTRIES)
-            scroll_offset = selected_index - VISIBLE_ENTRIES + 1;
+        if (switcher) {
+            if (selected_index < entry_count-1) selected_index++;
+        } else {
+            selected_index = (selected_index + VISIBLE_ENTRIES < entry_count) ? selected_index + VISIBLE_ENTRIES : entry_count - 1;
+            if (selected_index >= scroll_offset + VISIBLE_ENTRIES)
+                scroll_offset = selected_index - VISIBLE_ENTRIES + 1;
+        }
     }
 
 input_done:;
