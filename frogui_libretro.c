@@ -71,6 +71,7 @@ static const ConsoleMapping console_mappings[] = {
     {"sega",   CORES_PATH "/picodrive_libretro.so"},
     {"gg",     CORES_PATH "/gearsystem_libretro.so"},
     {"gpgx",   CORES_PATH "/genesis_plus_gx_libretro.so"},
+    {"segacd", CORES_PATH "/genesis_plus_gx_libretro.so"},   /* Sega CD / Mega CD (needs BIOS) */
     {"MD",     CORES_PATH "/picodrive_libretro.so"},
     {"SMS",    CORES_PATH "/picodrive_libretro.so"},
     {"GG",     CORES_PATH "/gearsystem_libretro.so"},
