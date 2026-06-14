@@ -48,6 +48,7 @@ static const ConsoleMapping console_mappings[] = {
     {"nesq",   CORES_PATH "/quicknes_libretro.so"},
     {"nest",   CORES_PATH "/nestopia_libretro.so"},
     {"FC",     CORES_PATH "/fceumm_libretro.so"},
+    {"fds",    CORES_PATH "/fceumm_libretro.so"},   /* Famicom Disk System (needs disksys.rom BIOS) */
     {"NES",    CORES_PATH "/quicknes_libretro.so"},
     /* SNES */
     {"snes",   CORES_PATH "/snes9x2005_plus_libretro.so"},
@@ -73,6 +74,7 @@ static const ConsoleMapping console_mappings[] = {
     {"gpgx",   CORES_PATH "/genesis_plus_gx_libretro.so"},
     {"segacd", CORES_PATH "/genesis_plus_gx_libretro.so"},   /* Sega CD / Mega CD (needs BIOS) */
     {"MD",     CORES_PATH "/picodrive_libretro.so"},
+    {"32x",    CORES_PATH "/picodrive_libretro.so"},   /* Sega 32X (heavy, may run slow) */
     {"SMS",    CORES_PATH "/picodrive_libretro.so"},
     {"GG",     CORES_PATH "/gearsystem_libretro.so"},
     /* Atari */
