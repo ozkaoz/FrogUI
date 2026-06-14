@@ -401,16 +401,18 @@ static int settings_filter_idx_on_enter = 0;  /* snapshot for restart-on-change 
 static int settings_auto_resume = 0;    /* 0=off, 1=on */
 static int settings_anim = 1;           /* UI animations: 0=off, 1=on */
 static int settings_hide_empty = 0;     /* hide rom folders with no games: 0=off, 1=on */
+static int settings_game_switcher = 0;  /* recents as box-art carousel: 0=off, 1=on */
 static const char *filter_names[] = {"nearest", "bilinear"};
 static const char *onoff_names[] = {"off", "on"};
 #define FILTER_COUNT 2
 #define SETTINGS_BRIGHTNESS_STEP 5
 /* Filter option removed from the menu — always bilinear (HW path). */
-#define SETTINGS_ROW_COUNT 7
+#define SETTINGS_ROW_COUNT 8
 #define SETTINGS_ROW_AUTORESUME 3
 #define SETTINGS_ROW_ANIM 4
 #define SETTINGS_ROW_HIDEEMPTY 5
-#define SETTINGS_ROW_REMAP 6
+#define SETTINGS_ROW_SWITCHER 6
+#define SETTINGS_ROW_REMAP 7
 
 static bool remap_wizard_active = false;
 static int  remap_step = 0;
@@ -466,6 +468,8 @@ static void settings_load_file(void) {
             settings_auto_resume = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "hide_empty") == 0) {
             settings_hide_empty = (strcmp(val, "on") == 0) ? 1 : 0;
+        } else if (strcmp(line, "game_switcher") == 0) {
+            settings_game_switcher = (strcmp(val, "on") == 0) ? 1 : 0;
         }
     }
     fclose(f);
@@ -483,6 +487,7 @@ static void settings_save_file(void) {
     fprintf(f, "auto_resume=%s\n", onoff_names[settings_auto_resume]);
     fprintf(f, "animations=%s\n", onoff_names[settings_anim]);
     fprintf(f, "hide_empty=%s\n", onoff_names[settings_hide_empty]);
+    fprintf(f, "game_switcher=%s\n", onoff_names[settings_game_switcher]);
     fflush(f);
     fsync(fileno(f));
     fclose(f);
@@ -680,6 +685,94 @@ static long playtime_lookup(const char *path) {
     }
     fclose(f);
     return sec;
+}
+
+/* ---------------- OnionOS-style game switcher (recents as box-art carousel) ----
+ * Art = box art (.res/<name>.rgb565); if missing, the newest save-state
+ * screenshot picoarch wrote (.st<N>.bmp). Toggled by settings_game_switcher. */
+#include "stb_image.h"
+
+/* Newest save-state screenshot for a game: /mnt/sdcard/picoarch/<tag>/<base>.st<N>.bmp */
+static int switcher_savestate_bmp(const char *full_path, char *out, size_t n) {
+    char dir[640]; strncpy(dir, full_path, sizeof dir - 1); dir[sizeof dir - 1] = 0;
+    char *sl = strrchr(dir, '/'); if (!sl) return 0;
+    char base[256]; strncpy(base, sl + 1, sizeof base - 1); base[sizeof base - 1] = 0;
+    *sl = 0;
+    char *tagsl = strrchr(dir, '/'); const char *tag = tagsl ? tagsl + 1 : dir;
+    char *dot = strrchr(base, '.'); if (dot) *dot = 0;     /* strip extension */
+    for (int slot = 9; slot >= 0; slot--) {                 /* prefer auto-resume slot 9 */
+        snprintf(out, n, "/mnt/sdcard/picoarch/%s/%s.st%d.bmp", tag, base, slot);
+        if (access(out, F_OK) == 0) return 1;
+    }
+    return 0;
+}
+
+static void switcher_blit565(uint16_t *fb, const uint16_t *src, int sw, int sh,
+                             int bx, int by, int bw, int bh) {
+    if (!src || sw <= 0 || sh <= 0) return;
+    int dw = bw, dh = sh * bw / sw;
+    if (dh > bh) { dh = bh; dw = sw * bh / sh; }
+    int ox = bx + (bw - dw) / 2, oy = by + (bh - dh) / 2;
+    for (int y = 0; y < dh; y++) {
+        const uint16_t *r = src + (size_t)(y * sh / dh) * sw;
+        uint16_t *d = fb + (size_t)(oy + y) * SCREEN_WIDTH + ox;
+        for (int x = 0; x < dw; x++) d[x] = r[x * sw / dw];
+    }
+}
+
+static void render_game_switcher(uint16_t *framebuffer) {
+    render_header(framebuffer, "RECENT GAMES");
+    const RecentGame *list = recent_games_get_list();
+    int n = recent_games_get_count();
+    if (n <= 0) {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, SCREEN_HEIGHT/2,
+                       "No recent games yet", COLOR_TEXT);
+        render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
+        return;
+    }
+    if (selected_index < 0) selected_index = 0;
+    if (selected_index >= n) selected_index = n - 1;
+    const RecentGame *g = &list[selected_index];
+
+    int bw = SCREEN_WIDTH * 6 / 10, bh = SCREEN_HEIGHT * 52 / 100;
+    int bx = (SCREEN_WIDTH - bw) / 2, by = HEADER_HEIGHT + UI_S(14);
+    render_fill_rect(framebuffer, bx - 2, by - 2, bw + 4, bh + 4, 0x39E7);
+    render_fill_rect(framebuffer, bx, by, bw, bh, 0x2104);
+
+    int drawn = 0;
+    char path[1024];
+    get_thumbnail_path(g->full_path, path, sizeof path);
+    Thumbnail tb;
+    if (load_thumbnail(path, &tb) && tb.data) {
+        switcher_blit565(framebuffer, tb.data, tb.width, tb.height, bx, by, bw, bh);
+        free_thumbnail(&tb); drawn = 1;
+    }
+    if (!drawn && switcher_savestate_bmp(g->full_path, path, sizeof path)) {
+        int w, h, ch; unsigned char *img = stbi_load(path, &w, &h, &ch, 3);
+        if (img) {
+            int dw = bw, dh = h * bw / w; if (dh > bh) { dh = bh; dw = w * bh / h; }
+            int ox = bx + (bw - dw) / 2, oy = by + (bh - dh) / 2;
+            for (int y = 0; y < dh; y++) {
+                const unsigned char *rr = img + (size_t)(y * h / dh) * w * 3;
+                uint16_t *d = framebuffer + (size_t)(oy + y) * SCREEN_WIDTH + ox;
+                for (int x = 0; x < dw; x++) {
+                    const unsigned char *p = rr + (size_t)(x * w / dw) * 3;
+                    d[x] = ((p[0] & 0xF8) << 8) | ((p[1] & 0xFC) << 3) | (p[2] >> 3);
+                }
+            }
+            stbi_image_free(img); drawn = 1;
+        }
+    }
+    if (!drawn)
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, bx + UI_S(16), by + bh/2,
+                       "(no art)", COLOR_TEXT);
+
+    int ny = by + bh + UI_S(10);
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, ny, g->display_name, COLOR_TEXT);
+    char pos[48]; snprintf(pos, sizeof pos, "< %d / %d >", selected_index + 1, n);
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, ny + UI_S(22), pos, COLOR_TEXT);
+
+    render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
 
 /* Hand the active theme's colors to picoarch so its in-game menu matches FrogUI.
@@ -979,6 +1072,8 @@ static void handle_input(void) {
                 settings_anim = (settings_anim + delta + 2) % 2;
             } else if (settings_menu_idx == SETTINGS_ROW_HIDEEMPTY) {
                 settings_hide_empty = (settings_hide_empty + delta + 2) % 2;
+            } else if (settings_menu_idx == SETTINGS_ROW_SWITCHER) {
+                settings_game_switcher = (settings_game_switcher + delta + 2) % 2;
             }
             settings_apply();
         }
@@ -1373,12 +1468,20 @@ static void render_settings_menu(void) {
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y5, line, COLOR_TEXT);
     }
-    /* Button Mapping row */
+    /* Game switcher row */
+    snprintf(line, sizeof(line), "Game Switcher: < %s >", onoff_names[settings_game_switcher]);
     int y6 = y5 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_REMAP) {
-        render_text_pillbox(framebuffer, PADDING, y6, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    if (settings_menu_idx == SETTINGS_ROW_SWITCHER) {
+        render_text_pillbox(framebuffer, PADDING, y6, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y6, "Button Mapping", COLOR_TEXT);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y6, line, COLOR_TEXT);
+    }
+    /* Button Mapping row */
+    int y7 = y6 + ITEM_HEIGHT;
+    if (settings_menu_idx == SETTINGS_ROW_REMAP) {
+        render_text_pillbox(framebuffer, PADDING, y7, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    } else {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y7, "Button Mapping", COLOR_TEXT);
     }
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
@@ -1499,6 +1602,12 @@ void retro_run(void) {
         render_remap_wizard();
     } else if (settings_menu_active) {
         render_settings_menu();
+    } else if (viewing_recents && settings_game_switcher) {
+        if (banner_is_loaded())
+            banner_render(framebuffer);
+        else
+            render_clear_screen(framebuffer);
+        render_game_switcher(framebuffer);
     } else {
         if (banner_is_loaded())
             banner_render(framebuffer);
