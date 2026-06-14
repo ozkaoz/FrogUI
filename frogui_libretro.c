@@ -667,6 +667,21 @@ done:
     scroll_offset  = 0;
 }
 
+/* Total seconds played for a game, from picoarch's playtime.txt. */
+static long playtime_lookup(const char *path) {
+    if (!path || !*path) return 0;
+    FILE *f = fopen("/mnt/sdcard/frogui/playtime.txt", "r");
+    if (!f) return 0;
+    char line[1100]; long sec = 0;
+    while (fgets(line, sizeof line, f)) {
+        char *t = strchr(line, '\t'); if (!t) continue;
+        *t = 0; char *p = t + 1; p[strcspn(p, "\r\n")] = 0;
+        if (!strcmp(p, path)) { sec = atol(line); break; }
+    }
+    fclose(f);
+    return sec;
+}
+
 /* Hand the active theme's colors to picoarch so its in-game menu matches FrogUI.
  * picoarch reads <exe_dir>/skin/skin.txt; its parser expects 24-bit RGB888 hex
  * (it converts to RGB565), so expand our RGB565 theme colors to RGB888. */
@@ -1540,6 +1555,25 @@ void retro_run(void) {
                            strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0);
         /* X opens search in the normal browser (systems root + any game folder). */
         int show_search = (!viewing_recents && !viewing_favourites && !viewing_search);
+
+        /* Play-time for the selected game (browse view). */
+        if (!viewing_recents && !viewing_favourites && !viewing_search &&
+            selected_index < entry_count && !entries[selected_index].is_dir &&
+            strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
+            strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
+            strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0) {
+            char fp[1024];
+            snprintf(fp, sizeof fp, "%s/%s", current_path, entries[selected_index].name);
+            long s = playtime_lookup(fp);
+            if (s > 0) {
+                char t[64]; long h = s/3600, m = (s%3600)/60;
+                if (h) snprintf(t, sizeof t, "Played %ldh %ldm", h, m);
+                else   snprintf(t, sizeof t, "Played %ldm", m);
+                font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING,
+                               SCREEN_HEIGHT - 56, t, COLOR_TEXT);
+            }
+        }
+
         render_legend(framebuffer, legend_mode, show_select, show_search);
     }
 
