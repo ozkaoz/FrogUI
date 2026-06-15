@@ -729,10 +729,10 @@ static void switcher_blit565(uint16_t *fb, const uint16_t *src, int sw, int sh,
 }
 
 static void render_game_switcher(uint16_t *framebuffer) {
-    render_header(framebuffer, "RECENT GAMES");
     const RecentGame *list = recent_games_get_list();
     int n = recent_games_get_count();
     if (n <= 0) {
+        render_header(framebuffer, "RECENT GAMES");
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, SCREEN_HEIGHT/2,
                        "No recent games yet", COLOR_TEXT);
         render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
@@ -742,10 +742,11 @@ static void render_game_switcher(uint16_t *framebuffer) {
     if (selected_index >= n) selected_index = n - 1;
     const RecentGame *g = &list[selected_index];
 
-    /* Full-screen art: fills from below the header to the bottom info bar. */
+    /* Art fills the whole screen above the bottom info bar (no header, no legend
+     * — they just shrink the art). */
     int barh = UI_S(30);
-    int bx = 0, by = HEADER_HEIGHT;
-    int bw = SCREEN_WIDTH, bh = SCREEN_HEIGHT - HEADER_HEIGHT - barh;
+    int bx = 0, by = 0;
+    int bw = SCREEN_WIDTH, bh = SCREEN_HEIGHT - barh;
     render_fill_rect(framebuffer, bx, by, bw, bh, 0x0000);
 
     int drawn = 0;
@@ -776,24 +777,22 @@ static void render_game_switcher(uint16_t *framebuffer) {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, bx + UI_S(16), by + bh/2,
                        "(no screenshot - open the in-game menu once)", COLOR_TEXT);
 
-    /* Bottom info bar: game title (left) + position / play time (right). */
+    /* Bottom info bar: game name (left) + position / play time (right). */
     int byb = SCREEN_HEIGHT - barh;
     render_fill_rect(framebuffer, 0, byb, SCREEN_WIDTH, barh, 0x2104);
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, byb + UI_S(8),
-                   g->display_name, COLOR_TEXT);
+                   g->game_name, COLOR_TEXT);
     char info[96];
     long secs = playtime_lookup(g->full_path);
     if (secs >= 3600)
-        snprintf(info, sizeof info, "%d/%d   %ldh %ldm", selected_index + 1, n, secs/3600, (secs%3600)/60);
+        snprintf(info, sizeof info, "Played %ldh %ldm   %d/%d", secs/3600, (secs%3600)/60, selected_index + 1, n);
     else if (secs >= 60)
-        snprintf(info, sizeof info, "%d/%d   %ldm", selected_index + 1, n, secs/60);
+        snprintf(info, sizeof info, "Played %ldm   %d/%d", secs/60, selected_index + 1, n);
     else
         snprintf(info, sizeof info, "%d/%d", selected_index + 1, n);
     int iw = (int)strlen(info) * UI_S(8);
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH - iw - PADDING, byb + UI_S(8),
                    info, COLOR_TEXT);
-
-    render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
 
 /* Switch the browser into the recents view (used by the Recents entry and, when
