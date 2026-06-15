@@ -788,6 +788,8 @@ static void render_game_switcher(uint16_t *framebuffer) {
         snprintf(info, sizeof info, "Played %ldh %ldm   %d/%d", secs/3600, (secs%3600)/60, selected_index + 1, n);
     else if (secs >= 60)
         snprintf(info, sizeof info, "Played %ldm   %d/%d", secs/60, selected_index + 1, n);
+    else if (secs > 0)
+        snprintf(info, sizeof info, "Played %lds   %d/%d", secs, selected_index + 1, n);
     else
         snprintf(info, sizeof info, "%d/%d", selected_index + 1, n);
     int iw = (int)strlen(info) * UI_S(8);
