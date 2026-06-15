@@ -399,7 +399,7 @@ static int settings_brightness = 75;    /* 0..100, step 5 */
 static int settings_filter_idx = 1;     /* forced bilinear (option removed from menu) */
 static int settings_filter_idx_on_enter = 0;  /* snapshot for restart-on-change */
 static int settings_auto_resume = 0;    /* 0=off, 1=on */
-static int settings_anim = 1;           /* UI animations: 0=off, 1=on */
+static int settings_anim = 0;           /* UI animations: 0=off, 1=on */
 static int settings_hide_empty = 0;     /* hide rom folders with no games: 0=off, 1=on */
 static int settings_game_switcher = 1;  /* recents as box-art carousel: 0=off, 1=on */
 static int settings_load_recents = 0;   /* start FrogUI in the recents view: 0=off, 1=on */
