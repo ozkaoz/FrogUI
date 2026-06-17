@@ -239,25 +239,37 @@ typedef struct { char name[64]; const char *path; } CoreChoice;
 static CoreChoice core_choices[160];
 static int core_choice_count = 0;
 
+/* Cores selectable in the per-game/per-folder picker but NOT auto-mapped to any
+ * rom folder (no default wiring). Lets users opt into heavier modern cores
+ * (FBNeo, mame2003-plus) per game without changing the lightweight defaults. */
+static const char *extra_picker_cores[] = {
+    CORES_PATH "/fbneo_libretro.so",
+    CORES_PATH "/mame2003_plus_libretro.so",
+    NULL,
+};
+
+static void add_core_choice(const char *p) {
+    for (int j = 1; j < core_choice_count; j++)
+        if (strcmp(core_choices[j].path, p) == 0) return;   /* dedup by path */
+    if (core_choice_count >= (int)(sizeof(core_choices)/sizeof(core_choices[0])))
+        return;
+    const char *base = strrchr(p, '/'); base = base ? base + 1 : p;
+    char nm[64]; strncpy(nm, base, sizeof(nm)-1); nm[sizeof(nm)-1] = '\0';
+    char *suf = strstr(nm, "_libretro.so"); if (suf) *suf = '\0';
+    strncpy(core_choices[core_choice_count].name, nm, 63);
+    core_choices[core_choice_count].name[63] = '\0';
+    core_choices[core_choice_count].path = p;
+    core_choice_count++;
+}
+
 static void build_core_choices(void) {
     strcpy(core_choices[0].name, "Default (auto)");
     core_choices[0].path = NULL;
     core_choice_count = 1;
-    for (int i = 0; console_mappings[i].console_name; i++) {
-        const char *p = console_mappings[i].core_path;
-        int dup = 0;
-        for (int j = 1; j < core_choice_count; j++)
-            if (strcmp(core_choices[j].path, p) == 0) { dup = 1; break; }
-        if (dup || core_choice_count >= (int)(sizeof(core_choices)/sizeof(core_choices[0])))
-            continue;
-        const char *base = strrchr(p, '/'); base = base ? base + 1 : p;
-        char nm[64]; strncpy(nm, base, sizeof(nm)-1); nm[sizeof(nm)-1] = '\0';
-        char *suf = strstr(nm, "_libretro.so"); if (suf) *suf = '\0';
-        strncpy(core_choices[core_choice_count].name, nm, 63);
-        core_choices[core_choice_count].name[63] = '\0';
-        core_choices[core_choice_count].path = p;
-        core_choice_count++;
-    }
+    for (int i = 0; console_mappings[i].console_name; i++)
+        add_core_choice(console_mappings[i].core_path);
+    for (int i = 0; extra_picker_cores[i]; i++)
+        add_core_choice(extra_picker_cores[i]);
 }
 
 static int core_choice_index_for_path(const char *path) {
