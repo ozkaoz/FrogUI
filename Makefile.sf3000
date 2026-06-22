@@ -40,7 +40,8 @@ LIBRETRO_SOURCES = frogui_libretro.c \
                    favorites.c \
                    backlight.c \
                    banner.c \
-                   input.c
+                   input.c \
+                   core_override.c
 
 LIBRETRO_TARGET = frogui_libretro.so
 
@@ -58,12 +59,14 @@ $(TARGET): $(OBJECTS)
 	$(STRIP) $@
 	@echo "Built $@ successfully!"
 
-# Build libretro core .so
-$(LIBRETRO_TARGET): $(LIBRETRO_OBJECTS)
-	@echo "Linking $@..."
-	$(CC) $(CFLAGS) -shared -o $@ $(LIBRETRO_OBJECTS) -L$(SYSROOT)/usr/lib -lc -lm
-	$(STRIP) $@
-	@echo "Built $@ successfully!"
+# Build libretro core .so — delegate to build_libretro.sh, the ONE canonical
+# recipe. Do NOT inline the flags here: the core needs -D__LIBRETRO__ -G0
+# -Wl,--no-undefined and core_override.c; a stale copy in this Makefile silently
+# builds a black-screen core (undefined symbols / wrong code path). Keep it in
+# one place.
+$(LIBRETRO_TARGET): $(LIBRETRO_SOURCES) core_override.c
+	@echo "Building $@ via build_libretro.sh (canonical)..."
+	sh build_libretro.sh
 
 # Compile source files (standalone)
 %.o: %.c

@@ -38,6 +38,7 @@
 #define LAUNCH_FILE  "/tmp/frogui_launch.txt"
 #define PCSX4ALL_BIN SDCARD_BASE "/cubegm/pcsx4all"
 #define PICO286_BIN  SDCARD_BASE "/cubegm/pico286"
+#define LGPT_BIN     SDCARD_BASE "/cubegm/lgpt"
 
 /* Console → core mapping (folder name → libretro .so)
  * Folder names match /mnt/sdcard/roms/ subdirectories (gb300_multicore convention). */
@@ -127,6 +128,7 @@ static const ConsoleMapping console_mappings[] = {
     /* Misc */
     {"pico8",  CORES_PATH "/fake08_libretro.so"},   /* PICO-8 (fake08 core) */
     {"pico286", PICO286_BIN},                        /* DOS PC (standalone, launched directly) */
+    {"lgpt",   LGPT_BIN},                            /* LittleGPTracker (standalone, launched directly) */
     {"fake08", CORES_PATH "/fake08_libretro.so"},   /* legacy folder name */
     {"lowres-nx", CORES_PATH "/lowresnx_libretro.so"},
     {"tic80",  CORES_PATH "/tic80_libretro.so"},   /* TIC-80 fantasy console (.tic carts) */
@@ -809,6 +811,39 @@ static void render_game_switcher(uint16_t *framebuffer) {
                    info, COLOR_TEXT);
 }
 
+/* Box-art side panel (Onion/muOS-style): right portion of the list view shows
+ * the selected game's box art + name. Opaque card is drawn first so any
+ * overflowing list-row text on the left is painted over. */
+static void render_boxart_panel(uint16_t *fb, const char *full_path, const char *name) {
+    int px   = SCREEN_WIDTH * 58 / 100;
+    int top  = UI_S(44);
+    int bot  = SCREEN_HEIGHT - UI_S(40);
+    int pw   = SCREEN_WIDTH - px - UI_S(10);
+    int ph   = bot - top;
+    if (pw < UI_S(60) || ph < UI_S(60)) return;          /* too narrow to bother */
+
+    char tpath[1024];
+    get_thumbnail_path(full_path, tpath, sizeof tpath);
+    Thumbnail tb;
+    if (!(load_thumbnail(tpath, &tb) && tb.data)) return; /* no art → no panel */
+
+    int nameh = UI_S(22);
+    int aw = pw, ah = ph - nameh;
+    render_fill_rect(fb, px, top, pw, ph, 0x10A2);        /* dark card */
+    switcher_blit565(fb, tb.data, tb.width, tb.height, px, top, aw, ah);
+    free_thumbnail(&tb);
+
+    /* Name centered under the art, truncated to panel width. */
+    char nm[64];
+    int maxc = pw / UI_S(8); if (maxc > (int)sizeof(nm) - 1) maxc = sizeof(nm) - 1;
+    int i = 0; for (; name[i] && i < maxc; i++) nm[i] = name[i];
+    if (name[i]) { if (i > 2) i -= 2; nm[i++] = '.'; nm[i++] = '.'; }
+    nm[i] = '\0';
+    int tw = (int)strlen(nm) * UI_S(8);
+    font_draw_text(fb, SCREEN_WIDTH, SCREEN_HEIGHT, px + (pw - tw) / 2, top + ah + UI_S(4),
+                   nm, COLOR_TEXT);
+}
+
 /* Switch the browser into the recents view (used by the Recents entry and, when
  * "Start in Recents" is on, at startup). */
 static void enter_recents_view(void) {
@@ -908,10 +943,15 @@ static bool is_pico286_folder(const char *folder) {
     return folder && strcasecmp(folder, "pico286") == 0;
 }
 
+static bool is_lgpt_folder(const char *folder) {
+    return folder && strcasecmp(folder, "lgpt") == 0;
+}
+
 /* A standalone-launched binary (run directly, not as a libretro core). */
 static bool is_standalone_bin(const char *name) {
     return name && (strcmp(name, PCSX4ALL_BIN) == 0 ||
-                    strcmp(name, PICO286_BIN)  == 0);
+                    strcmp(name, PICO286_BIN)  == 0 ||
+                    strcmp(name, LGPT_BIN)     == 0);
 }
 
 /* ----------------------------- Search (X button) ----------------------------- */
@@ -1010,6 +1050,8 @@ static void search_launch(int idx) {
             request_standalone_launch(PCSX4ALL_BIN, path);
         else if (is_pico286_folder(folder) && access(PICO286_BIN, F_OK) == 0)
             request_standalone_launch(PICO286_BIN, path);
+        else if (is_lgpt_folder(folder) && access(LGPT_BIN, F_OK) == 0)
+            request_standalone_launch(LGPT_BIN, path);
         else
             request_game_launch(core, path);
     } else {
@@ -1309,6 +1351,8 @@ static void handle_input(void) {
                         request_standalone_launch(PCSX4ALL_BIN, rom_path);
                     else if (is_pico286_folder(folder) && access(PICO286_BIN, F_OK) == 0)
                         request_standalone_launch(PICO286_BIN, rom_path);
+                    else if (is_lgpt_folder(folder) && access(LGPT_BIN, F_OK) == 0)
+                        request_standalone_launch(LGPT_BIN, rom_path);
                     else
                         request_game_launch(core, rom_path);
                 } else {
@@ -1696,6 +1740,18 @@ void retro_run(void) {
                                  (idx == selected_index), scroll_offset, 0);
             }
         }
+        /* Box-art panel for the selected game (normal browsing only). */
+        if (!viewing_recents && !viewing_favourites && !viewing_search &&
+            selected_index >= 0 && selected_index < entry_count &&
+            !entries[selected_index].is_dir &&
+            strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
+            strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
+            strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0) {
+            char fp[1024];
+            snprintf(fp, sizeof fp, "%s/%s", current_path, entries[selected_index].name);
+            render_boxart_panel(framebuffer, fp, entries[selected_index].name);
+        }
+
         /* Compute Y-button legend mode for current selection */
         int legend_mode = LEGEND_X_NONE;
         if (viewing_favourites) {
