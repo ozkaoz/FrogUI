@@ -53,6 +53,7 @@ FrogUI is a libretro-based launcher that provides a simple, clean interface for 
 | SELECT + START | Open emulator menu |
 | SELECT + R | Quick save (slot 0) |
 | SELECT + L | Quick load (slot 0) |
+| SELECT + L1 | Screenshot (.bmp to `screenshots/`) |
 
 ## SF3000 Architecture
 
