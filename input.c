@@ -130,8 +130,15 @@ bool input_was_pressed(FrogButton btn) {
     return ((current_state >> btn) & 1) && !((prev_state >> btn) & 1);
 }
 
+/* Raw state from a libretro frontend (rkgame), set each frame by the core.
+ * OR'd with cubevol's joy_key shm so both paths work: picoarch feeds shm
+ * (SF3000/R36SX), rkgame feeds this (SF3500 native-core). */
+static uint32_t ext_raw = 0;
+void input_set_ext_raw(uint32_t raw) { ext_raw = raw; }
+
 uint32_t input_get_raw_state(void) {
-    return cubevol_keys ? (*cubevol_keys & 0xFFFF) : 0;
+    uint32_t shm = cubevol_keys ? (*cubevol_keys & 0xFFFF) : 0;
+    return shm | ext_raw;
 }
 
 void input_set_raw_bit(FrogButton btn, int raw_bit) {

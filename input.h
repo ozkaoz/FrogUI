@@ -44,6 +44,7 @@ bool input_was_pressed(FrogButton btn);   /* true only on rising edge this frame
 
 /* Raw 16-bit cubevol value (needed by remap wizard). */
 uint32_t input_get_raw_state(void);
+void input_set_ext_raw(uint32_t raw);
 
 /* Remap table: logical button -> raw bit index (0-15), or -1 = unmapped. */
 void input_reset_defaults(void);

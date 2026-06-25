@@ -1665,6 +1665,22 @@ static void render_search_kbd(void) {
 }
 
 void retro_run(void) {
+    /* Take input from the libretro frontend (rkgame feeds cores this way; the
+     * cubevol joy_key shm isn't updated when rkgame owns evdev). Build FrogUI's
+     * raw bit layout from the joypad → input_set_ext_raw (OR'd with shm). */
+    if (input_state_cb) {
+        if (input_poll_cb) input_poll_cb();
+        uint32_t raw = 0;
+        #define RB(id, bit) if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, (id))) raw |= (1u << (bit))
+        RB(RETRO_DEVICE_ID_JOYPAD_UP, 4);    RB(RETRO_DEVICE_ID_JOYPAD_DOWN, 6);
+        RB(RETRO_DEVICE_ID_JOYPAD_LEFT, 7);  RB(RETRO_DEVICE_ID_JOYPAD_RIGHT, 5);
+        RB(RETRO_DEVICE_ID_JOYPAD_A, 13);    RB(RETRO_DEVICE_ID_JOYPAD_B, 14);
+        RB(RETRO_DEVICE_ID_JOYPAD_X, 12);    RB(RETRO_DEVICE_ID_JOYPAD_Y, 15);
+        RB(RETRO_DEVICE_ID_JOYPAD_L, 10);    RB(RETRO_DEVICE_ID_JOYPAD_R, 11);
+        RB(RETRO_DEVICE_ID_JOYPAD_START, 3); RB(RETRO_DEVICE_ID_JOYPAD_SELECT, 0);
+        #undef RB
+        input_set_ext_raw(raw);
+    }
     handle_input();
 
     /* Reload banner when view, path, or selection changes.
