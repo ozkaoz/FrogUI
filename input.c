@@ -91,27 +91,38 @@ void input_deinit(void) {
  * small latency. Release clears instantly. Dpad and the rest stay instant.
  * This runs only in the FrogUI menu (games read the shm directly), so in-game
  * response is unaffected. */
+/* Raw state from a libretro frontend (rkgame/picoarch), set each frame by the core
+ * via input_set_ext_raw — this is picoarch's ALREADY-debounced input. */
+static uint32_t ext_raw = 0;
+
 #define FACE_BITS 0xF000u
 #define FACE_HOLD 4   /* frames (~65ms @ 60fps) a face bit must be held to count */
+#define NAV_HOLD  3   /* dpad/shoulders/start/select: ~50ms — kills the two-writer
+                       * (rkgame+cubevol) flicker that ghosts the menu */
 
 void input_update(void) {
-    if (!cubevol_keys) return;
-    uint32_t raw = *cubevol_keys & 0xFFFF;
+    /* Combine the raw joy_key shm with ext_raw (picoarch's ALREADY-debounced input
+     * via input_state_cb). The shm alone flickers from the rkgame+cubevol two-writer
+     * race → ghost menu inputs; ORing+debouncing below removes that. */
+    uint32_t raw = (cubevol_keys ? (*cubevol_keys & 0xFFFF) : 0) | (ext_raw & 0xFFFF);
 
-    /* Per-bit hold debounce on the face bits (X=12/A=13/B=14/Y=15). */
-    static uint8_t face_cnt[16] = {0};
-    static uint32_t committed_face = 0;
-    for (int b = 12; b <= 15; b++) {
+    /* Per-bit hold debounce on ALL 16 bits (was face-only — that left dpad ghosting).
+     * Face bits hold longer (stick drift); the rest use NAV_HOLD. Release clears
+     * instantly so let-go stays snappy. */
+    static uint8_t cnt[16] = {0};
+    static uint32_t committed = 0;
+    for (int b = 0; b < 16; b++) {
         uint32_t m = 1u << b;
+        int hold = (m & FACE_BITS) ? FACE_HOLD : NAV_HOLD;
         if (raw & m) {
-            if (face_cnt[b] < 255) face_cnt[b]++;
-            if (face_cnt[b] >= FACE_HOLD) committed_face |= m;
+            if (cnt[b] < 255) cnt[b]++;
+            if (cnt[b] >= hold) committed |= m;
         } else {
-            face_cnt[b] = 0;
-            committed_face &= ~m;
+            cnt[b] = 0;
+            committed &= ~m;
         }
     }
-    raw = (raw & ~FACE_BITS) | (committed_face & FACE_BITS);
+    raw = committed;
 
     prev_state = current_state;
     uint32_t s = 0;
@@ -130,10 +141,6 @@ bool input_was_pressed(FrogButton btn) {
     return ((current_state >> btn) & 1) && !((prev_state >> btn) & 1);
 }
 
-/* Raw state from a libretro frontend (rkgame), set each frame by the core.
- * OR'd with cubevol's joy_key shm so both paths work: picoarch feeds shm
- * (SF3000/R36SX), rkgame feeds this (SF3500 native-core). */
-static uint32_t ext_raw = 0;
 void input_set_ext_raw(uint32_t raw) { ext_raw = raw; }
 
 uint32_t input_get_raw_state(void) {
