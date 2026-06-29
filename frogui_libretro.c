@@ -417,18 +417,20 @@ static int settings_anim = 0;           /* UI animations: 0=off, 1=on */
 static int settings_hide_empty = 0;     /* hide rom folders with no games: 0=off, 1=on */
 static int settings_game_switcher = 1;  /* recents as box-art carousel: 0=off, 1=on */
 static int settings_load_recents = 0;   /* start FrogUI in the recents view: 0=off, 1=on */
+static int settings_volume = 100;       /* global output volume 0..100 → cubegm/sndgain.txt */
 static const char *filter_names[] = {"nearest", "bilinear"};
 static const char *onoff_names[] = {"off", "on"};
 #define FILTER_COUNT 2
 #define SETTINGS_BRIGHTNESS_STEP 5
 /* Filter option removed from the menu — always bilinear (HW path). */
-#define SETTINGS_ROW_COUNT 9
+#define SETTINGS_ROW_COUNT 10
 #define SETTINGS_ROW_AUTORESUME 3
 #define SETTINGS_ROW_ANIM 4
 #define SETTINGS_ROW_HIDEEMPTY 5
 #define SETTINGS_ROW_SWITCHER 6
 #define SETTINGS_ROW_LOADRECENTS 7
 #define SETTINGS_ROW_REMAP 8
+#define SETTINGS_ROW_VOLUME 9
 
 static bool remap_wizard_active = false;
 static int  remap_step = 0;
@@ -451,6 +453,13 @@ static void settings_apply(void) {
         font_load_file(font_files[settings_font_idx]);
     cube_set_backlight(settings_brightness);
     banner_set_anim(settings_anim);
+    /* Global output volume: there's no system mixer on this hardware, so every
+     * frontend (picoarch, pcsx4all, lgpt) reads this percent from sndgain.txt and
+     * scales its own audio. FrogUI is the single place to set it. */
+    if (settings_volume < 0)   settings_volume = 0;
+    if (settings_volume > 100) settings_volume = 100;
+    { FILE *vf = fopen("/mnt/sdcard/cubegm/sndgain.txt", "w");
+      if (vf) { fprintf(vf, "%d\n", settings_volume); fflush(vf); fsync(fileno(vf)); fclose(vf); } }
 }
 
 static void settings_load_file(void) {
@@ -475,6 +484,8 @@ static void settings_load_file(void) {
                     strcasecmp(font_disp[i], val) == 0) { settings_font_idx = i; break; }
         } else if (strcmp(line, "brightness") == 0) {
             settings_brightness = atoi(val);
+        } else if (strcmp(line, "volume") == 0) {
+            settings_volume = atoi(val);
         } else if (strcmp(line, "filter") == 0) {
             for (int i = 0; i < FILTER_COUNT; i++)
                 if (strcmp(filter_names[i], val) == 0) { settings_filter_idx = i; break; }
@@ -501,6 +512,7 @@ static void settings_save_file(void) {
     fprintf(f, "theme=%s\n", themes[settings_theme_idx].name);
     fprintf(f, "font=%s\n", font_count > 0 ? font_files[settings_font_idx] : "");
     fprintf(f, "brightness=%d\n", settings_brightness);
+    fprintf(f, "volume=%d\n", settings_volume);
     fprintf(f, "filter=%s\n", filter_names[settings_filter_idx]);
     fprintf(f, "auto_resume=%s\n", onoff_names[settings_auto_resume]);
     fprintf(f, "animations=%s\n", onoff_names[settings_anim]);
@@ -1174,6 +1186,10 @@ static void handle_input(void) {
                 settings_game_switcher = (settings_game_switcher + delta + 2) % 2;
             } else if (settings_menu_idx == SETTINGS_ROW_LOADRECENTS) {
                 settings_load_recents = (settings_load_recents + delta + 2) % 2;
+            } else if (settings_menu_idx == SETTINGS_ROW_VOLUME) {
+                settings_volume += delta * 5;
+                if (settings_volume < 0)   settings_volume = 0;
+                if (settings_volume > 100) settings_volume = 100;
             }
             settings_apply();
         }
@@ -1589,6 +1605,14 @@ static void render_settings_menu(void) {
         render_text_pillbox(framebuffer, PADDING, y8, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y8, "Button Mapping", COLOR_TEXT);
+    }
+    /* Volume row (global output gain for all emulators) */
+    snprintf(line, sizeof(line), "Volume: < %d%% >", settings_volume);
+    int y9 = y8 + ITEM_HEIGHT;
+    if (settings_menu_idx == SETTINGS_ROW_VOLUME) {
+        render_text_pillbox(framebuffer, PADDING, y9, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    } else {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y9, line, COLOR_TEXT);
     }
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
