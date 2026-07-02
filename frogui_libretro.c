@@ -161,6 +161,9 @@ static const ConsoleMapping console_mappings[] = {
     {"psx",    CORES_PATH "/pcsx_rearmed_libretro.so"},
     {"PS",     CORES_PATH "/pcsx_rearmed_libretro.so"},
     {"ps1r",   CORES_PATH "/pcsx_rearmed_libretro.so"},
+    /* PSP: PPSSPP libretro core (software renderer, IR interpreter) */
+    {"psp",    CORES_PATH "/ppsspp_libretro.so"},
+    {"PSP",    CORES_PATH "/ppsspp_libretro.so"},
     {NULL, NULL}
 };
 
