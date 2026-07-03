@@ -34,7 +34,12 @@
 
 #define SDCARD_BASE  "/mnt/sdcard"
 #define CORES_PATH   SDCARD_BASE "/cubegm/cores"
-#define ROMS_PATH    SDCARD_BASE "/roms"
+/* roms root: resolved at init. Prefer roms/, accept ROMS/ (exfat-mounted cards
+ * are case-sensitive on this kernel), create roms/ if neither exists, so the
+ * menu ALWAYS has a valid root instead of NULL entries → SIGBUS addr=0. */
+#define ROMS_PATH_DEFAULT SDCARD_BASE "/roms"
+static char g_roms_path[64] = ROMS_PATH_DEFAULT;
+#define ROMS_PATH    g_roms_path
 #define LAUNCH_FILE  "/tmp/frogui_launch.txt"
 #define PCSX4ALL_BIN SDCARD_BASE "/cubegm/pcsx4all"
 #define PICO286_BIN  SDCARD_BASE "/cubegm/pico286"
@@ -328,7 +333,7 @@ typedef struct { char name[256]; int is_dir; } DirEntry;
 static DirEntry *entries    = NULL;
 static int entry_count      = 0;
 static int entry_capacity   = 0;
-static char current_path[MAX_PATH_LEN] = ROMS_PATH;
+static char current_path[MAX_PATH_LEN] = ROMS_PATH_DEFAULT;
 static int selected_index   = 0;
 static int scroll_offset    = 0;
 static uint16_t *framebuffer = NULL;
@@ -649,11 +654,14 @@ static int folder_has_games(const char *path, int depth) {
 }
 
 static void scan_directory(const char *path) {
+    /* An unopenable dir is NOT an early return: fall through with an empty
+     * listing so the root still gets its Settings/Recents rows. The old
+     * early-return left entries == NULL while the renderer drew the list →
+     * NULL deref (SIGBUS addr=0) and a boot crash-loop on cards without roms/. */
     DIR *dir = opendir(path);
-    if (!dir) return;
     entry_count = 0;
     struct dirent *e;
-    while ((e = readdir(dir)) != NULL) {
+    while (dir && (e = readdir(dir)) != NULL) {
         if (e->d_name[0] == '.') continue;
         struct stat st;
         char full[MAX_PATH_LEN];
@@ -685,7 +693,7 @@ static void scan_directory(const char *path) {
         entries[entry_count].is_dir = S_ISDIR(st.st_mode);
         entry_count++;
     }
-    closedir(dir);
+    if (dir) closedir(dir);
     /* Sort: dirs first, then alpha */
     for (int i = 0; i < entry_count-1; i++)
         for (int j = i+1; j < entry_count; j++)
@@ -726,6 +734,7 @@ static void scan_directory(const char *path) {
         }
     }
 done:
+    if (!entries) entry_count = 0;   /* belt: renderer must never walk NULL */
     viewing_recents = false;
     viewing_favourites = false;
     selected_index = 0;
@@ -1549,6 +1558,18 @@ void retro_init(void) {
     dbg("calloc done");
     render_init(framebuffer);
     dbg("render_init done");
+    /* Resolve the roms root before the first scan (see g_roms_path). */
+    {
+        DIR *d = opendir(g_roms_path);
+        if (d) closedir(d);
+        else {
+            DIR *alt = opendir(SDCARD_BASE "/ROMS");
+            if (alt) { closedir(alt); strcpy(g_roms_path, SDCARD_BASE "/ROMS"); }
+            else mkdir(g_roms_path, 0777);
+        }
+        strncpy(current_path, g_roms_path, MAX_PATH_LEN - 1);
+        current_path[MAX_PATH_LEN - 1] = '\0';
+    }
     scan_directory(current_path);
     dbg("scan_directory done");
     if (settings_load_recents && recent_games_get_count() > 0)
