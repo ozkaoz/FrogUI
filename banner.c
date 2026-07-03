@@ -108,3 +108,26 @@ void banner_render(uint16_t *framebuffer) {
 int banner_is_loaded(void) {
     return banner_loaded;
 }
+
+/* Repaint a rect with the current background: the banner image slice when one
+ * is loaded, otherwise the given fallback color. Lets overlays (box-art panel)
+ * cover list-text overflow without drawing an opaque card. */
+void banner_fill_region(uint16_t *fb, int x, int y, int w, int h, uint16_t fallback) {
+    if (!fb) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > SCREEN_WIDTH)  w = SCREEN_WIDTH - x;
+    if (y + h > SCREEN_HEIGHT) h = SCREEN_HEIGHT - y;
+    if (w <= 0 || h <= 0) return;
+    if (banner_loaded && banner_buf) {
+        for (int yy = 0; yy < h; yy++)
+            memcpy(fb + (size_t)(y + yy) * SCREEN_WIDTH + x,
+                   banner_buf + (size_t)(y + yy) * SCREEN_WIDTH + x,
+                   (size_t)w * sizeof(uint16_t));
+    } else {
+        for (int yy = 0; yy < h; yy++) {
+            uint16_t *row = fb + (size_t)(y + yy) * SCREEN_WIDTH + x;
+            for (int xx = 0; xx < w; xx++) row[xx] = fallback;
+        }
+    }
+}

@@ -1,6 +1,7 @@
 #include "render.h"
 #include "theme.h"
 #include "font.h"
+#include "stb_image.h"   /* decls only; impl lives in banner.c */
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -253,28 +254,71 @@ void get_thumbnail_path(const char *game_path, char *thumb_path, size_t thumb_pa
         strncat(thumb_path, filename, thumb_path_size - strlen(thumb_path) - 1);
     }
     
-    // Use raw RGB565 format - no parsing, fixed size, minimal memory
-    strncat(thumb_path, ".rgb565", thumb_path_size - strlen(thumb_path) - 1);
+    // No extension: load_thumbnail() probes .png/.jpg/.jpeg/.bmp then .rgb565.
 }
 
 static uint16_t rgb24_to_rgb565(uint8_t r, uint8_t g, uint8_t b) {
     return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 }
 
-int load_thumbnail(const char *rgb565_path, Thumbnail *thumb) {
-    if (!rgb565_path || !thumb) return 0;
-    
-    // Initialize thumbnail
-    thumb->data = NULL;
-    thumb->width = 0;
-    thumb->height = 0;
-    
-    // Just use the raw RGB565 loader - no parsing, no dynamic allocation
-    return load_raw_rgb565(rgb565_path, thumb);
+// Static buffers for thumbnail - no malloc/free hell
+static uint16_t thumbnail_buffer[250 * 250]; // Max size: 250x250
+static uint8_t  thumbnail_alpha[250 * 250];  // per-pixel alpha, composited at render
+#define THUMB_BUF_W 250
+#define THUMB_BUF_H 250
+
+// Decode a JPG/PNG/BMP via stb_image and nearest-neighbor downscale into the
+// static RGB565 buffer (aspect-preserving, capped at 250x250). Alpha is kept
+// in a side buffer and composited per-pixel at render time, so transparent
+// boxart shows whatever is actually behind it (theme/background image).
+static int load_image_thumbnail(const char *path, Thumbnail *thumb) {
+    int w, h, ch;
+    unsigned char *img = stbi_load(path, &w, &h, &ch, 4);  // force RGBA
+    if (!img) return 0;
+    if (w <= 0 || h <= 0) { stbi_image_free(img); return 0; }
+
+    int dw = w, dh = h;
+    if (dw > THUMB_BUF_W) { dh = dh * THUMB_BUF_W / dw; dw = THUMB_BUF_W; }
+    if (dh > THUMB_BUF_H) { dw = dw * THUMB_BUF_H / dh; dh = THUMB_BUF_H; }
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+
+    for (int y = 0; y < dh; y++) {
+        int sy = y * h / dh;
+        for (int x = 0; x < dw; x++) {
+            int sx = x * w / dw;
+            const unsigned char *p = img + (sy * w + sx) * 4;
+            thumbnail_buffer[y * dw + x] = rgb24_to_rgb565(p[0], p[1], p[2]);
+            thumbnail_alpha[y * dw + x] = p[3];
+        }
+    }
+    stbi_image_free(img);
+
+    thumb->data = thumbnail_buffer;
+    thumb->alpha = thumbnail_alpha;
+    thumb->width = dw;
+    thumb->height = dh;
+    return 1;
 }
 
-// Static buffer for thumbnail - no malloc/free hell
-static uint16_t thumbnail_buffer[250 * 200]; // Max size: 250x200
+int load_thumbnail(const char *base_path, Thumbnail *thumb) {
+    if (!base_path || !thumb) return 0;
+    thumb->data = NULL;
+    thumb->alpha = NULL;
+    thumb->width = 0;
+    thumb->height = 0;
+
+    char p[1024];
+    // Decodable image formats first (easy to drop in), then raw fallback.
+    static const char *exts[] = { ".png", ".jpg", ".jpeg", ".bmp", NULL };
+    for (int i = 0; exts[i]; i++) {
+        snprintf(p, sizeof p, "%s%s", base_path, exts[i]);
+        if (access(p, F_OK) == 0 && load_image_thumbnail(p, thumb))
+            return 1;
+    }
+    snprintf(p, sizeof p, "%s.rgb565", base_path);
+    return load_raw_rgb565(p, thumb);
+}
 
 int load_raw_rgb565(const char *path, Thumbnail *thumb) {
     // Check if file exists
@@ -310,6 +354,7 @@ int load_raw_rgb565(const char *path, Thumbnail *thumb) {
             thumb->width = w;
             thumb->height = h;
             thumb->data = thumbnail_buffer; // Use static buffer
+            thumb->alpha = NULL;            // raw rgb565 has no alpha: opaque
             
             size_t read_bytes = fread(thumb->data, 1, file_size, fp);
             fclose(fp);
@@ -330,6 +375,7 @@ void free_thumbnail(Thumbnail *thumb) {
     if (thumb) {
         // No need to free static buffer, just reset pointer
         thumb->data = NULL;
+    thumb->alpha = NULL;
         thumb->width = 0;
         thumb->height = 0;
     }
@@ -361,38 +407,36 @@ void render_thumbnail(uint16_t *framebuffer, const Thumbnail *thumb) {
     // Center thumbnail vertically on screen
     int start_y = (SCREEN_HEIGHT - display_height) / 2;
     
-    // Draw background frame with dark gray border and light gray fill
-    #define FRAME_COLOR 0x39E7      // Dark gray border (RGB565: 7,15,7)
-    #define BG_COLOR    0x2104      // Very dark gray background (RGB565: 4,8,4)
-    
-    int frame_x = start_x - 2;
-    int frame_y = start_y - 2; 
-    int frame_w = display_width + 4;
-    int frame_h = display_height + 4;
-    
-    // Draw border frame
-    render_fill_rect(framebuffer, frame_x, frame_y, frame_w, frame_h, FRAME_COLOR);
-    // Draw inner background
-    render_fill_rect(framebuffer, start_x, start_y, display_width, display_height, BG_COLOR);
-    
-    // Draw scaled thumbnail (simple nearest neighbor for now)
+    // No backing card/frame: the image composites straight onto whatever is
+    // behind it (theme fill or background image) using its own alpha.
     for (int y = 0; y < display_height; y++) {
         for (int x = 0; x < display_width; x++) {
             int screen_x = start_x + x;
             int screen_y = start_y + y;
-            
-            if (screen_x >= 0 && screen_x < SCREEN_WIDTH && 
+
+            if (screen_x >= 0 && screen_x < SCREEN_WIDTH &&
                 screen_y >= 0 && screen_y < SCREEN_HEIGHT) {
-                
+
                 // Simple scaling - map display coords to source coords
                 int src_x = (x * thumb->width) / display_width;
                 int src_y = (y * thumb->height) / display_height;
-                
+
                 if (src_x < thumb->width && src_y < thumb->height) {
-                    uint16_t pixel = thumb->data[src_y * thumb->width + src_x];
-                    // Only draw non-black pixels, let dark gray background show through
-                    if (pixel != 0x0000) {  
-                        framebuffer[screen_y * SCREEN_WIDTH + screen_x] = pixel;
+                    int si = src_y * thumb->width + src_x;
+                    unsigned a = thumb->alpha ? thumb->alpha[si] : 255;
+                    if (a == 0) continue;
+                    uint16_t pixel = thumb->data[si];
+                    uint16_t *dst = &framebuffer[screen_y * SCREEN_WIDTH + screen_x];
+                    if (a == 255) {
+                        *dst = pixel;
+                    } else {
+                        // blend RGB565 src over dst by alpha
+                        unsigned sr = (pixel >> 11) & 0x1F, sg = (pixel >> 5) & 0x3F, sb = pixel & 0x1F;
+                        unsigned dr = (*dst  >> 11) & 0x1F, dg = (*dst  >> 5) & 0x3F, db = *dst & 0x1F;
+                        unsigned r = (sr * a + dr * (255 - a)) / 255;
+                        unsigned g = (sg * a + dg * (255 - a)) / 255;
+                        unsigned b = (sb * a + db * (255 - a)) / 255;
+                        *dst = (uint16_t)((r << 11) | (g << 5) | b);
                     }
                 }
             }

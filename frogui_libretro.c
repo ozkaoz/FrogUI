@@ -267,6 +267,10 @@ static void add_core_choice(const char *p) {
     core_choice_count++;
 }
 
+static int core_choice_cmp(const void *a, const void *b) {
+    return strcasecmp(((const CoreChoice *)a)->name, ((const CoreChoice *)b)->name);
+}
+
 static void build_core_choices(void) {
     strcpy(core_choices[0].name, "Default (auto)");
     core_choices[0].path = NULL;
@@ -275,6 +279,28 @@ static void build_core_choices(void) {
         add_core_choice(console_mappings[i].core_path);
     for (int i = 0; extra_picker_cores[i]; i++)
         add_core_choice(extra_picker_cores[i]);
+    /* Dynamic: every *_libretro.so actually present in the cores dir is
+     * selectable too, so a newly dropped-in core shows up in the picker
+     * without a TreeFrogUI rebuild. (strdup'd once at init; add_core_choice
+     * dedupes against the mapped cores by path.) */
+    DIR *d = opendir(CORES_PATH);
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            const char *n = e->d_name;
+            size_t l = strlen(n);
+            if (l < 13 || strcmp(n + l - 12, "_libretro.so") != 0) continue;
+            if (strcmp(n, "frogui_libretro.so") == 0) continue;  /* the menu itself */
+            char full[512];
+            snprintf(full, sizeof full, CORES_PATH "/%s", n);
+            char *p = strdup(full);
+            if (p) add_core_choice(p);
+        }
+        closedir(d);
+    }
+    /* Alphabetical, keeping "Default (auto)" pinned at index 0. */
+    if (core_choice_count > 2)
+        qsort(&core_choices[1], core_choice_count - 1, sizeof(CoreChoice), core_choice_cmp);
 }
 
 static int core_choice_index_for_path(const char *path) {
@@ -416,8 +442,8 @@ static int settings_brightness = 75;    /* 0..100, step 5 */
 static int settings_filter_idx = 1;     /* forced bilinear (option removed from menu) */
 static int settings_filter_idx_on_enter = 0;  /* snapshot for restart-on-change */
 static int settings_auto_resume = 0;    /* 0=off, 1=on */
-static int settings_anim = 0;           /* UI animations: 0=off, 1=on */
-static int settings_hide_empty = 0;     /* hide rom folders with no games: 0=off, 1=on */
+static int settings_anim = 1;           /* UI animations: 0=off, 1=on */
+static int settings_hide_empty = 1;     /* hide rom folders with no games: 0=off, 1=on */
 static int settings_game_switcher = 1;  /* recents as box-art carousel: 0=off, 1=on */
 static int settings_load_recents = 0;   /* start FrogUI in the recents view: 0=off, 1=on */
 static int settings_volume = 100;       /* global output volume 0..100 → cubegm/sndgain.txt */
@@ -744,16 +770,29 @@ static int switcher_savestate_bmp(const char *full_path, char *out, size_t n) {
     return 0;
 }
 
-static void switcher_blit565(uint16_t *fb, const uint16_t *src, int sw, int sh,
-                             int bx, int by, int bw, int bh) {
+static void switcher_blit565(uint16_t *fb, const uint16_t *src, const uint8_t *alpha,
+                             int sw, int sh, int bx, int by, int bw, int bh) {
     if (!src || sw <= 0 || sh <= 0) return;
     int dw = bw, dh = sh * bw / sw;
     if (dh > bh) { dh = bh; dw = sw * bh / sh; }
     int ox = bx + (bw - dw) / 2, oy = by + (bh - dh) / 2;
     for (int y = 0; y < dh; y++) {
-        const uint16_t *r = src + (size_t)(y * sh / dh) * sw;
+        int sy = y * sh / dh;
+        const uint16_t *r = src + (size_t)sy * sw;
+        const uint8_t  *ar = alpha ? alpha + (size_t)sy * sw : NULL;
         uint16_t *d = fb + (size_t)(oy + y) * SCREEN_WIDTH + ox;
-        for (int x = 0; x < dw; x++) d[x] = r[x * sw / dw];
+        for (int x = 0; x < dw; x++) {
+            int sx = x * sw / dw;
+            unsigned a = ar ? ar[sx] : 255;
+            if (a == 0) continue;
+            uint16_t px = r[sx];
+            if (a == 255) { d[x] = px; continue; }
+            unsigned sr = (px  >> 11) & 0x1F, sg = (px  >> 5) & 0x3F, sb = px  & 0x1F;
+            unsigned dr = (d[x]>> 11) & 0x1F, dg = (d[x]>> 5) & 0x3F, db = d[x] & 0x1F;
+            d[x] = (uint16_t)((((sr*a + dr*(255-a))/255) << 11) |
+                              (((sg*a + dg*(255-a))/255) << 5)  |
+                               ((sb*a + db*(255-a))/255));
+        }
     }
 }
 
@@ -783,7 +822,7 @@ static void render_game_switcher(uint16_t *framebuffer) {
     get_thumbnail_path(g->full_path, path, sizeof path);
     Thumbnail tb;
     if (load_thumbnail(path, &tb) && tb.data) {
-        switcher_blit565(framebuffer, tb.data, tb.width, tb.height, bx, by, bw, bh);
+        switcher_blit565(framebuffer, tb.data, tb.alpha, tb.width, tb.height, bx, by, bw, bh);
         free_thumbnail(&tb); drawn = 1;
     }
     if (!drawn && switcher_savestate_bmp(g->full_path, path, sizeof path)) {
@@ -844,8 +883,11 @@ static void render_boxart_panel(uint16_t *fb, const char *full_path, const char 
 
     int nameh = UI_S(22);
     int aw = pw, ah = ph - nameh;
-    render_fill_rect(fb, px, top, pw, ph, 0x10A2);        /* dark card */
-    switcher_blit565(fb, tb.data, tb.width, tb.height, px, top, aw, ah);
+    /* Repaint the true background (banner slice or theme bg) instead of an
+     * opaque card: covers list-text overflow, and transparent box art shows
+     * the real background through it. */
+    banner_fill_region(fb, px, top, pw, ph, COLOR_BG);
+    switcher_blit565(fb, tb.data, tb.alpha, tb.width, tb.height, px, top, aw, ah);
     free_thumbnail(&tb);
 
     /* Name centered under the art, truncated to panel width. */
@@ -1827,19 +1869,16 @@ void retro_run(void) {
         /* X opens search in the normal browser (systems root + any game folder). */
         int show_search = (!viewing_recents && !viewing_favourites && !viewing_search);
 
-        /* Play-time for the selected game (browse view). */
-        if (!viewing_recents && !viewing_favourites && !viewing_search &&
-            selected_index < entry_count && !entries[selected_index].is_dir &&
-            strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
-            strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
-            strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0) {
-            char fp[1024];
-            snprintf(fp, sizeof fp, "%s/%s", current_path, entries[selected_index].name);
-            long s = playtime_lookup(fp);
+        /* Play-time for the selected game (Recents list only). */
+        if (viewing_recents && selected_index < entry_count &&
+            selected_index < recent_games_get_count()) {
+            const RecentGame *rg = recent_games_get_list();
+            long s = playtime_lookup(rg[selected_index].full_path);
             if (s > 0) {
                 char t[64]; long h = s/3600, m = (s%3600)/60;
-                if (h) snprintf(t, sizeof t, "Played %ldh %ldm", h, m);
-                else   snprintf(t, sizeof t, "Played %ldm", m);
+                if (h)          snprintf(t, sizeof t, "Played %ldh %ldm", h, m);
+                else if (s >= 60) snprintf(t, sizeof t, "Played %ldm", m);
+                else            snprintf(t, sizeof t, "Played %lds", s);
                 font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING,
                                SCREEN_HEIGHT - 56, t, COLOR_TEXT);
             }

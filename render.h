@@ -47,8 +47,8 @@ void render_set_geometry(int w, int h, int ui_scale);
 // Thumbnail layout
 #define THUMBNAIL_AREA_X     UI_S(160)
 #define THUMBNAIL_AREA_Y     UI_S(40)
-#define THUMBNAIL_MAX_WIDTH  UI_S(160)
-#define THUMBNAIL_MAX_HEIGHT UI_S(200)
+#define THUMBNAIL_MAX_WIDTH  250
+#define THUMBNAIL_MAX_HEIGHT 250
 
 // Text — more chars visible at larger scales (wider screen)
 #define MAX_FILENAME_DISPLAY_LEN   (20 * UI_SCALE / 100)
@@ -92,7 +92,8 @@ void render_menu_row(uint16_t *framebuffer, const char *name, int is_dir,
 
 // Thumbnail functions
 typedef struct {
-    uint16_t *data;  // Changed to uint16_t for ARGB8888
+    uint16_t *data;       // RGB565 pixels
+    const uint8_t *alpha; // per-pixel alpha (NULL = fully opaque)
     int width;
     int height;
 } Thumbnail;
