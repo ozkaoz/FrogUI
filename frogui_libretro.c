@@ -44,6 +44,7 @@ static char g_roms_path[64] = ROMS_PATH_DEFAULT;
 #define PCSX4ALL_BIN SDCARD_BASE "/cubegm/pcsx4all"
 #define PICO286_BIN  SDCARD_BASE "/cubegm/pico286"
 #define LGPT_BIN     SDCARD_BASE "/cubegm/lgpt"
+#define ROCKBOX_BIN  SDCARD_BASE "/cubegm/rockbox.sh"  /* wrapper sets HOME+SDL env */
 
 /* Console → core mapping (folder name → libretro .so)
  * Folder names match /mnt/sdcard/roms/ subdirectories (gb300_multicore convention). */
@@ -134,6 +135,7 @@ static const ConsoleMapping console_mappings[] = {
     {"pico8",  CORES_PATH "/fake08_libretro.so"},   /* PICO-8 (fake08 core) */
     {"pico286", PICO286_BIN},                        /* DOS PC (standalone, launched directly) */
     {"lgpt",   LGPT_BIN},                            /* LittleGPTracker (standalone, launched directly) */
+    {"rockbox", ROCKBOX_BIN},                        /* Rockbox music player (standalone) */
     {"fake08", CORES_PATH "/fake08_libretro.so"},   /* legacy folder name */
     {"lowres-nx", CORES_PATH "/lowresnx_libretro.so"},
     {"tic80",  CORES_PATH "/tic80_libretro.so"},   /* TIC-80 fantasy console (.tic carts) */
@@ -1017,7 +1019,8 @@ static bool is_lgpt_folder(const char *folder) {
 static bool is_standalone_bin(const char *name) {
     return name && (strcmp(name, PCSX4ALL_BIN) == 0 ||
                     strcmp(name, PICO286_BIN)  == 0 ||
-                    strcmp(name, LGPT_BIN)     == 0);
+                    strcmp(name, LGPT_BIN)     == 0 ||
+                    strcmp(name, ROCKBOX_BIN)  == 0);
 }
 
 /* ----------------------------- Search (X button) ----------------------------- */
@@ -1112,12 +1115,13 @@ static void search_launch(int idx) {
     if (ov)
         request_game_launch(ov, path);
     else if (core) {
+        /* ps1 folder maps to pcsx_rearmed by default but we prefer the standalone
+         * pcsx4all when present; every other standalone (pico286/lgpt/rockbox) is
+         * caught generically by is_standalone_bin on the resolved core path. */
         if (is_ps1_folder(folder) && access(PCSX4ALL_BIN, F_OK) == 0)
             request_standalone_launch(PCSX4ALL_BIN, path);
-        else if (is_pico286_folder(folder) && access(PICO286_BIN, F_OK) == 0)
-            request_standalone_launch(PICO286_BIN, path);
-        else if (is_lgpt_folder(folder) && access(LGPT_BIN, F_OK) == 0)
-            request_standalone_launch(LGPT_BIN, path);
+        else if (is_standalone_bin(core) && access(core, F_OK) == 0)
+            request_standalone_launch(core, path);
         else
             request_game_launch(core, path);
     } else {
@@ -1419,10 +1423,8 @@ static void handle_input(void) {
                 } else if (core) {
                     if (is_ps1_folder(folder) && access(PCSX4ALL_BIN, F_OK) == 0)
                         request_standalone_launch(PCSX4ALL_BIN, rom_path);
-                    else if (is_pico286_folder(folder) && access(PICO286_BIN, F_OK) == 0)
-                        request_standalone_launch(PICO286_BIN, rom_path);
-                    else if (is_lgpt_folder(folder) && access(LGPT_BIN, F_OK) == 0)
-                        request_standalone_launch(LGPT_BIN, rom_path);
+                    else if (is_standalone_bin(core) && access(core, F_OK) == 0)
+                        request_standalone_launch(core, rom_path);
                     else
                         request_game_launch(core, rom_path);
                 } else {
