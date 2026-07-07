@@ -124,6 +124,7 @@ static const ConsoleMapping console_mappings[] = {
     /* Ports / games */
     {"Quake",  CORES_PATH "/tyrquake_libretro.so"},
     {"quake2", CORES_PATH "/vitaquake2_libretro.so"},
+    {"scummvm", CORES_PATH "/scummvm_libretro.so"},
     {"outrun", CORES_PATH "/cannonball_libretro.so"},
     {"wolf3d", CORES_PATH "/ecwolf_libretro.so"},
     {"prboom", CORES_PATH "/prboom_libretro.so"},
