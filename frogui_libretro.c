@@ -145,6 +145,7 @@ static const ConsoleMapping console_mappings[] = {
     {"m2k",    CORES_PATH "/mame2000_libretro.so"},
     {"cps1",   CORES_PATH "/fbalpha2012_cps1_libretro.so"},    /* Capcom CPS-1 (FBA 2012) */
     {"cps2",   CORES_PATH "/fbalpha2012_cps2_libretro.so"},    /* Capcom CPS-2 (FBA 2012) */
+    {"cps3",   CORES_PATH "/fbalpha2012_cps3_libretro.so"},    /* Capcom CPS-3 (FBA 2012, experimental: heavy) */
     {"neogeo", CORES_PATH "/fbalpha2012_neogeo_libretro.so"},  /* Neo Geo (FBA 2012) */
     {"pokem",  CORES_PATH "/pokemini_libretro.so"},
     {"int",    CORES_PATH "/freeintv_libretro.so"},
@@ -455,13 +456,14 @@ static int settings_anim = 1;           /* UI animations: 0=off, 1=on */
 static int settings_hide_empty = 1;     /* hide rom folders with no games: 0=off, 1=on */
 static int settings_game_switcher = 1;  /* recents as box-art carousel: 0=off, 1=on */
 static int settings_load_recents = 0;   /* start FrogUI in the recents view: 0=off, 1=on */
+static int settings_disable_sleep = 0;  /* live-patch cubevol to disable power sleep: 0=off, 1=on. zhijack reads this at boot; applies after restart. */
 static int settings_volume = 100;       /* global output volume 0..100 → cubegm/sndgain.txt */
 static const char *filter_names[] = {"nearest", "bilinear"};
 static const char *onoff_names[] = {"off", "on"};
 #define FILTER_COUNT 2
 #define SETTINGS_BRIGHTNESS_STEP 5
 /* Filter option removed from the menu — always bilinear (HW path). */
-#define SETTINGS_ROW_COUNT 10
+#define SETTINGS_ROW_COUNT 11
 #define SETTINGS_ROW_AUTORESUME 3
 #define SETTINGS_ROW_ANIM 4
 #define SETTINGS_ROW_HIDEEMPTY 5
@@ -469,6 +471,7 @@ static const char *onoff_names[] = {"off", "on"};
 #define SETTINGS_ROW_LOADRECENTS 7
 #define SETTINGS_ROW_REMAP 8
 #define SETTINGS_ROW_VOLUME 9
+#define SETTINGS_ROW_NOSLEEP 10
 
 static bool remap_wizard_active = false;
 static int  remap_step = 0;
@@ -533,6 +536,8 @@ static void settings_load_file(void) {
             settings_auto_resume = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "hide_empty") == 0) {
             settings_hide_empty = (strcmp(val, "on") == 0) ? 1 : 0;
+        } else if (strcmp(line, "disable_sleep") == 0) {
+            settings_disable_sleep = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "game_switcher") == 0) {
             settings_game_switcher = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "load_recents") == 0) {
@@ -557,6 +562,7 @@ static void settings_save_file(void) {
     fprintf(f, "hide_empty=%s\n", onoff_names[settings_hide_empty]);
     fprintf(f, "game_switcher=%s\n", onoff_names[settings_game_switcher]);
     fprintf(f, "load_recents=%s\n", onoff_names[settings_load_recents]);
+    fprintf(f, "disable_sleep=%s\n", onoff_names[settings_disable_sleep]);
     fflush(f);
     fsync(fileno(f));
     fclose(f);
@@ -1250,6 +1256,8 @@ static void handle_input(void) {
                 settings_volume += delta * 5;
                 if (settings_volume < 0)   settings_volume = 0;
                 if (settings_volume > 100) settings_volume = 100;
+            } else if (settings_menu_idx == SETTINGS_ROW_NOSLEEP) {
+                settings_disable_sleep = (settings_disable_sleep + delta + 2) % 2;
             }
             settings_apply();
         }
@@ -1683,6 +1691,14 @@ static void render_settings_menu(void) {
         render_text_pillbox(framebuffer, PADDING, y9, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y9, line, COLOR_TEXT);
+    }
+    /* Disable Sleep row (applies after restart — zhijack live-patches cubevol) */
+    snprintf(line, sizeof(line), "Disable Sleep (restart): < %s >", onoff_names[settings_disable_sleep]);
+    int y10 = y9 + ITEM_HEIGHT;
+    if (settings_menu_idx == SETTINGS_ROW_NOSLEEP) {
+        render_text_pillbox(framebuffer, PADDING, y10, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    } else {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y10, line, COLOR_TEXT);
     }
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
