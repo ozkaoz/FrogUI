@@ -260,6 +260,7 @@ static int core_choice_count = 0;
 static const char *extra_picker_cores[] = {
     CORES_PATH "/fbneo_libretro.so",
     CORES_PATH "/mame2003_plus_libretro.so",
+    CORES_PATH "/snes9x2010_libretro.so",
     NULL,
 };
 
