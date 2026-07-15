@@ -73,7 +73,6 @@ static const ConsoleMapping console_mappings[] = {
     {"gbav",   CORES_PATH "/vba_next_libretro.so"},
     {"mgba",   CORES_PATH "/mgba_libretro.so"},
     {"gbaf",   CORES_PATH "/mgba_libretro.so"},
-    {"gbaf",   CORES_PATH "/mgba_libretro.so"},
     {"GBA",    CORES_PATH "/gpsp_libretro.so"},
     /* Sega */
     {"sega",   CORES_PATH "/picodrive_libretro.so"},
@@ -1138,146 +1137,162 @@ static void search_launch(int idx) {
     }
 }
 
+static void handle_search_kbd(void) {
+    if (input_was_pressed(FROG_BTN_UP))    search_kbd_r = (search_kbd_r - 1 + KBD_NROWS) % KBD_NROWS;
+    if (input_was_pressed(FROG_BTN_DOWN))  search_kbd_r = (search_kbd_r + 1) % KBD_NROWS;
+    if (input_was_pressed(FROG_BTN_LEFT))  search_kbd_c--;
+    if (input_was_pressed(FROG_BTN_RIGHT)) search_kbd_c++;
+    { int rl = kbd_row_len(search_kbd_r);
+      if (search_kbd_c < 0) search_kbd_c = rl - 1;
+      if (search_kbd_c >= rl) search_kbd_c = 0; }
+    if (input_was_pressed(FROG_BTN_A)) {
+        int len = (int)strlen(search_query);
+        if (search_kbd_r == KBD_SPECIAL_ROW) {
+            if (search_kbd_c == 0) { if (len < (int)sizeof(search_query)-1) { search_query[len]=' '; search_query[len+1]='\0'; } }
+            else if (search_kbd_c == 1) { if (len > 0) search_query[len-1] = '\0'; }
+            else run_search();
+        } else if (len < (int)sizeof(search_query)-1) {
+            search_query[len] = KBD_ROWS[search_kbd_r][search_kbd_c];
+            search_query[len+1] = '\0';
+        }
+    }
+    if (input_was_pressed(FROG_BTN_Y)) {            /* quick backspace */
+        int len = (int)strlen(search_query); if (len > 0) search_query[len-1] = '\0';
+    }
+    if (input_was_pressed(FROG_BTN_START)) run_search();
+    if (input_was_pressed(FROG_BTN_B)) {           /* cancel → restore browser list */
+        search_kbd_active = false;
+        scan_directory(current_path);
+        selected_index = 0; scroll_offset = 0;
+    }
+}
+
+static void handle_core_picker(void) {
+    if (input_was_pressed(FROG_BTN_UP)) {
+        core_picker_idx = (core_picker_idx - 1 + core_choice_count) % core_choice_count;
+    }
+    if (input_was_pressed(FROG_BTN_DOWN)) {
+        core_picker_idx = (core_picker_idx + 1) % core_choice_count;
+    }
+    if (input_was_pressed(FROG_BTN_LEFT)) {
+        core_picker_idx -= VISIBLE_ENTRIES;
+        if (core_picker_idx < 0) core_picker_idx = 0;
+    }
+    if (input_was_pressed(FROG_BTN_RIGHT)) {
+        core_picker_idx += VISIBLE_ENTRIES;
+        if (core_picker_idx >= core_choice_count) core_picker_idx = core_choice_count - 1;
+    }
+    if (core_picker_idx < core_picker_scroll)
+        core_picker_scroll = core_picker_idx;
+    if (core_picker_idx >= core_picker_scroll + VISIBLE_ENTRIES)
+        core_picker_scroll = core_picker_idx - VISIBLE_ENTRIES + 1;
+    if (input_was_pressed(FROG_BTN_A)) {
+        core_override_set(core_picker_key, core_choices[core_picker_idx].path);
+        core_picker_active = false;
+    }
+    if (input_was_pressed(FROG_BTN_B)) {
+        core_picker_active = false;
+    }
+}
+
+static void handle_remap_wizard(void) {
+    uint32_t raw   = input_get_raw_state();
+    uint32_t risen = raw & ~remap_prev_raw;
+    remap_prev_raw = raw;
+    bool skip = (risen >> input_get_raw_bit(FROG_BTN_B)) & 1;
+    int  pressed_bit = -1;
+    if (!skip) {
+        for (int bit = 0; bit < 16; bit++) {
+            if ((risen >> bit) & 1) { pressed_bit = bit; break; }
+        }
+    }
+    if (skip || pressed_bit >= 0) {
+        if (!skip) input_set_raw_bit((FrogButton)remap_step, pressed_bit);
+        remap_step++;
+        if (remap_step >= FROG_BTN_COUNT) {
+            remap_wizard_active = false;
+            input_save_remap(KEYMAP_FILE);
+        }
+    }
+}
+
+static void handle_settings_menu(void) {
+    extern const int theme_count;
+    if (input_was_pressed(FROG_BTN_UP))
+        settings_menu_idx = (settings_menu_idx - 1 + SETTINGS_ROW_COUNT) % SETTINGS_ROW_COUNT;
+    if (input_was_pressed(FROG_BTN_DOWN))
+        settings_menu_idx = (settings_menu_idx + 1) % SETTINGS_ROW_COUNT;
+    if (input_was_pressed(FROG_BTN_LEFT) || input_was_pressed(FROG_BTN_RIGHT)) {
+        int delta = input_was_pressed(FROG_BTN_RIGHT) ? 1 : -1;
+        if (settings_menu_idx == 0) {
+            settings_theme_idx = (settings_theme_idx + delta + theme_count) % theme_count;
+        } else if (settings_menu_idx == 1) {
+            if (font_count > 0)
+                settings_font_idx = (settings_font_idx + delta + font_count) % font_count;
+        } else if (settings_menu_idx == 2) {
+            settings_brightness += delta * SETTINGS_BRIGHTNESS_STEP;
+            if (settings_brightness < 0)   settings_brightness = 0;
+            if (settings_brightness > 100) settings_brightness = 100;
+        } else if (settings_menu_idx == SETTINGS_ROW_AUTORESUME) {
+            settings_auto_resume = (settings_auto_resume + delta + 2) % 2;
+        } else if (settings_menu_idx == SETTINGS_ROW_ANIM) {
+            settings_anim = (settings_anim + delta + 2) % 2;
+        } else if (settings_menu_idx == SETTINGS_ROW_HIDEEMPTY) {
+            settings_hide_empty = (settings_hide_empty + delta + 2) % 2;
+        } else if (settings_menu_idx == SETTINGS_ROW_SWITCHER) {
+            settings_game_switcher = (settings_game_switcher + delta + 2) % 2;
+        } else if (settings_menu_idx == SETTINGS_ROW_LOADRECENTS) {
+            settings_load_recents = (settings_load_recents + delta + 2) % 2;
+        } else if (settings_menu_idx == SETTINGS_ROW_VOLUME) {
+            settings_volume += delta * 5;
+            if (settings_volume < 0)   settings_volume = 0;
+            if (settings_volume > 100) settings_volume = 100;
+        } else if (settings_menu_idx == SETTINGS_ROW_NOSLEEP) {
+            settings_disable_sleep = (settings_disable_sleep + delta + 2) % 2;
+        }
+        settings_apply();
+    }
+    if (input_was_pressed(FROG_BTN_A) && settings_menu_idx == SETTINGS_ROW_REMAP) {
+        remap_step = 0;
+        remap_prev_raw = input_get_raw_state();
+        remap_wizard_active = true;
+        settings_menu_active = false;
+        return;
+    }
+    if ((input_was_pressed(FROG_BTN_A) && settings_menu_idx != SETTINGS_ROW_REMAP) ||
+         input_was_pressed(FROG_BTN_B)) {
+        settings_save_file();
+        settings_menu_active = false;
+        /* re-scan root so a hide-empty-folders change takes effect now */
+        scan_directory(ROMS_PATH);
+        strncpy(current_path, ROMS_PATH, MAX_PATH_LEN-1);
+        selected_index = 0; scroll_offset = 0;
+    }
+}
+
 static void handle_input(void) {
     input_update();
 
     /* Search keyboard overlay */
     if (search_kbd_active) {
-        if (input_was_pressed(FROG_BTN_UP))    search_kbd_r = (search_kbd_r - 1 + KBD_NROWS) % KBD_NROWS;
-        if (input_was_pressed(FROG_BTN_DOWN))  search_kbd_r = (search_kbd_r + 1) % KBD_NROWS;
-        if (input_was_pressed(FROG_BTN_LEFT))  search_kbd_c--;
-        if (input_was_pressed(FROG_BTN_RIGHT)) search_kbd_c++;
-        { int rl = kbd_row_len(search_kbd_r);
-          if (search_kbd_c < 0) search_kbd_c = rl - 1;
-          if (search_kbd_c >= rl) search_kbd_c = 0; }
-        if (input_was_pressed(FROG_BTN_A)) {
-            int len = (int)strlen(search_query);
-            if (search_kbd_r == KBD_SPECIAL_ROW) {
-                if (search_kbd_c == 0) { if (len < (int)sizeof(search_query)-1) { search_query[len]=' '; search_query[len+1]='\0'; } }
-                else if (search_kbd_c == 1) { if (len > 0) search_query[len-1] = '\0'; }
-                else run_search();
-            } else if (len < (int)sizeof(search_query)-1) {
-                search_query[len] = KBD_ROWS[search_kbd_r][search_kbd_c];
-                search_query[len+1] = '\0';
-            }
-        }
-        if (input_was_pressed(FROG_BTN_Y)) {            /* quick backspace */
-            int len = (int)strlen(search_query); if (len > 0) search_query[len-1] = '\0';
-        }
-        if (input_was_pressed(FROG_BTN_START)) run_search();
-        if (input_was_pressed(FROG_BTN_B)) {           /* cancel → restore browser list */
-            search_kbd_active = false;
-            scan_directory(current_path);
-            selected_index = 0; scroll_offset = 0;
-        }
+        handle_search_kbd();
         return;
     }
 
     /* Core picker overlay: choose an override core for the current ROM/folder */
     if (core_picker_active) {
-        if (input_was_pressed(FROG_BTN_UP)) {
-            core_picker_idx = (core_picker_idx - 1 + core_choice_count) % core_choice_count;
-        }
-        if (input_was_pressed(FROG_BTN_DOWN)) {
-            core_picker_idx = (core_picker_idx + 1) % core_choice_count;
-        }
-        if (input_was_pressed(FROG_BTN_LEFT)) {
-            core_picker_idx -= VISIBLE_ENTRIES;
-            if (core_picker_idx < 0) core_picker_idx = 0;
-        }
-        if (input_was_pressed(FROG_BTN_RIGHT)) {
-            core_picker_idx += VISIBLE_ENTRIES;
-            if (core_picker_idx >= core_choice_count) core_picker_idx = core_choice_count - 1;
-        }
-        if (core_picker_idx < core_picker_scroll)
-            core_picker_scroll = core_picker_idx;
-        if (core_picker_idx >= core_picker_scroll + VISIBLE_ENTRIES)
-            core_picker_scroll = core_picker_idx - VISIBLE_ENTRIES + 1;
-        if (input_was_pressed(FROG_BTN_A)) {
-            core_override_set(core_picker_key, core_choices[core_picker_idx].path);
-            core_picker_active = false;
-        }
-        if (input_was_pressed(FROG_BTN_B)) {
-            core_picker_active = false;
-        }
+        handle_core_picker();
         return;
     }
 
     /* Remap wizard: detect raw rising edge on any bit; B = skip this step */
     if (remap_wizard_active) {
-        uint32_t raw   = input_get_raw_state();
-        uint32_t risen = raw & ~remap_prev_raw;
-        remap_prev_raw = raw;
-        bool skip = (risen >> input_get_raw_bit(FROG_BTN_B)) & 1;
-        int  pressed_bit = -1;
-        if (!skip) {
-            for (int bit = 0; bit < 16; bit++) {
-                if ((risen >> bit) & 1) { pressed_bit = bit; break; }
-            }
-        }
-        if (skip || pressed_bit >= 0) {
-            if (!skip) input_set_raw_bit((FrogButton)remap_step, pressed_bit);
-            remap_step++;
-            if (remap_step >= FROG_BTN_COUNT) {
-                remap_wizard_active = false;
-                input_save_remap(KEYMAP_FILE);
-            }
-        }
+        handle_remap_wizard();
         return;
     }
 
     if (settings_menu_active) {
-        extern const int theme_count;
-        if (input_was_pressed(FROG_BTN_UP))
-            settings_menu_idx = (settings_menu_idx - 1 + SETTINGS_ROW_COUNT) % SETTINGS_ROW_COUNT;
-        if (input_was_pressed(FROG_BTN_DOWN))
-            settings_menu_idx = (settings_menu_idx + 1) % SETTINGS_ROW_COUNT;
-        if (input_was_pressed(FROG_BTN_LEFT) || input_was_pressed(FROG_BTN_RIGHT)) {
-            int delta = input_was_pressed(FROG_BTN_RIGHT) ? 1 : -1;
-            if (settings_menu_idx == 0) {
-                settings_theme_idx = (settings_theme_idx + delta + theme_count) % theme_count;
-            } else if (settings_menu_idx == 1) {
-                if (font_count > 0)
-                    settings_font_idx = (settings_font_idx + delta + font_count) % font_count;
-            } else if (settings_menu_idx == 2) {
-                settings_brightness += delta * SETTINGS_BRIGHTNESS_STEP;
-                if (settings_brightness < 0)   settings_brightness = 0;
-                if (settings_brightness > 100) settings_brightness = 100;
-            } else if (settings_menu_idx == SETTINGS_ROW_AUTORESUME) {
-                settings_auto_resume = (settings_auto_resume + delta + 2) % 2;
-            } else if (settings_menu_idx == SETTINGS_ROW_ANIM) {
-                settings_anim = (settings_anim + delta + 2) % 2;
-            } else if (settings_menu_idx == SETTINGS_ROW_HIDEEMPTY) {
-                settings_hide_empty = (settings_hide_empty + delta + 2) % 2;
-            } else if (settings_menu_idx == SETTINGS_ROW_SWITCHER) {
-                settings_game_switcher = (settings_game_switcher + delta + 2) % 2;
-            } else if (settings_menu_idx == SETTINGS_ROW_LOADRECENTS) {
-                settings_load_recents = (settings_load_recents + delta + 2) % 2;
-            } else if (settings_menu_idx == SETTINGS_ROW_VOLUME) {
-                settings_volume += delta * 5;
-                if (settings_volume < 0)   settings_volume = 0;
-                if (settings_volume > 100) settings_volume = 100;
-            } else if (settings_menu_idx == SETTINGS_ROW_NOSLEEP) {
-                settings_disable_sleep = (settings_disable_sleep + delta + 2) % 2;
-            }
-            settings_apply();
-        }
-        if (input_was_pressed(FROG_BTN_A) && settings_menu_idx == SETTINGS_ROW_REMAP) {
-            remap_step = 0;
-            remap_prev_raw = input_get_raw_state();
-            remap_wizard_active = true;
-            settings_menu_active = false;
-            return;
-        }
-        if ((input_was_pressed(FROG_BTN_A) && settings_menu_idx != SETTINGS_ROW_REMAP) ||
-             input_was_pressed(FROG_BTN_B)) {
-            settings_save_file();
-            settings_menu_active = false;
-            /* re-scan root so a hide-empty-folders change takes effect now */
-            scan_directory(ROMS_PATH);
-            strncpy(current_path, ROMS_PATH, MAX_PATH_LEN-1);
-            selected_index = 0; scroll_offset = 0;
-        }
+        handle_settings_menu();
         return;
     }
 
