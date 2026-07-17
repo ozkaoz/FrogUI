@@ -16,25 +16,19 @@ This guide covers building, compiling, and developing FrogUI for SF2000/GB300 ha
 ## Building from Source
 
 ### Prerequisites
-- SF2000/GB300 multicore toolchain
+- SF3000 cross-toolchain (MIPS32r2, little-endian, hard-float) at
+  `~/sf3000-work/sf3000toolchain/`. Download:
+  [game-de-it/sf3000 · sf3000_toolchain_v0.1](https://github.com/game-de-it/sf3000/releases/tag/sf3000_toolchain_v0.1)
 - Make
-- GCC for ARM (cross-compilation)
 
 ### Build Commands
 
-```bash
-# From the multicore root directory
-make CONSOLE=frogos CORE=cores/FrogOS
-```
-
-Or use the build script from the project root:
+TreeFrogUI builds FrogUI as a **libretro core** (`frogui_libretro.so`) that runs
+inside picoarch. Use the libretro build script — NOT the old `Makefile.sf3000`
+(a black-screen trap):
 
 ```bash
-# Single build
-./buildcoresworking.sh
-
-# Clean build
-./cleancoresworking.sh && ./buildcoresworking.sh
+./build_libretro.sh   # → frogui_libretro.so
 ```
 
 ### Build Outputs
