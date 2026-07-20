@@ -445,33 +445,35 @@ static void font_scan(void) {
 }
 
 static bool settings_menu_active = false;
-static int settings_menu_idx = 0;       /* row: 0=theme, 1=font, 2=brightness, 3=filter, 4=auto-resume, 5=remap */
+static int settings_menu_idx = 0;       /* row: 0=theme, 1=font, 2=brightness, 3=quick resume, 4=auto-save/auto-load, 5=animations... */
 static int settings_theme_idx = 0;
 static int settings_font_idx = 0;
 static int settings_brightness = 75;    /* 0..100, step 5 */
 static int settings_filter_idx = 1;     /* forced bilinear (option removed from menu) */
 static int settings_filter_idx_on_enter = 0;  /* snapshot for restart-on-change */
-static int settings_auto_resume = 0;    /* 0=off, 1=on */
+static int settings_quick_resume = 0;      /* boot straight into last game: 0=off, 1=on. Settings key stays "auto_resume" for upgrade compat. */
+static int settings_autosave_autoload = 0; /* auto-save on pause/quit + auto-load on any game launch (boot or manual pick): 0=off, 1=on */
 static int settings_anim = 1;           /* UI animations: 0=off, 1=on */
 static int settings_hide_empty = 1;     /* hide rom folders with no games: 0=off, 1=on */
 static int settings_game_switcher = 1;  /* recents as box-art carousel: 0=off, 1=on */
 static int settings_load_recents = 0;   /* start FrogUI in the recents view: 0=off, 1=on */
-static int settings_disable_sleep = 1;  /* live-patch cubevol to disable power sleep: 0=off, 1=on. zhijack reads this at boot; applies after restart. Default ON: R36SX/SF3500-class sleep isn't supported by TreeFrogUI, so ship with it disabled and point users at auto-resume instead. */
+static int settings_disable_sleep = 1;  /* live-patch cubevol to disable power sleep: 0=off, 1=on. zhijack reads this at boot; applies after restart. Default ON: R36SX/SF3500-class sleep isn't supported by TreeFrogUI, so ship with it disabled and point users at Quick Resume instead. */
 static int settings_volume = 100;       /* global output volume 0..100 → cubegm/sndgain.txt */
 static const char *filter_names[] = {"nearest", "bilinear"};
 static const char *onoff_names[] = {"off", "on"};
 #define FILTER_COUNT 2
 #define SETTINGS_BRIGHTNESS_STEP 5
 /* Filter option removed from the menu — always bilinear (HW path). */
-#define SETTINGS_ROW_COUNT 11
-#define SETTINGS_ROW_AUTORESUME 3
-#define SETTINGS_ROW_ANIM 4
-#define SETTINGS_ROW_HIDEEMPTY 5
-#define SETTINGS_ROW_SWITCHER 6
-#define SETTINGS_ROW_LOADRECENTS 7
-#define SETTINGS_ROW_REMAP 8
-#define SETTINGS_ROW_VOLUME 9
-#define SETTINGS_ROW_NOSLEEP 10
+#define SETTINGS_ROW_COUNT 12
+#define SETTINGS_ROW_QUICKRESUME 3
+#define SETTINGS_ROW_AUTOSAVE_AUTOLOAD 4
+#define SETTINGS_ROW_ANIM 5
+#define SETTINGS_ROW_HIDEEMPTY 6
+#define SETTINGS_ROW_SWITCHER 7
+#define SETTINGS_ROW_LOADRECENTS 8
+#define SETTINGS_ROW_REMAP 9
+#define SETTINGS_ROW_VOLUME 10
+#define SETTINGS_ROW_NOSLEEP 11
 
 static bool remap_wizard_active = false;
 static int  remap_step = 0;
@@ -533,7 +535,9 @@ static void settings_load_file(void) {
         } else if (strcmp(line, "animations") == 0) {
             settings_anim = (strcmp(val, "off") == 0) ? 0 : 1;
         } else if (strcmp(line, "auto_resume") == 0) {
-            settings_auto_resume = (strcmp(val, "on") == 0) ? 1 : 0;
+            settings_quick_resume = (strcmp(val, "on") == 0) ? 1 : 0;
+        } else if (strcmp(line, "autosave_autoload") == 0) {
+            settings_autosave_autoload = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "hide_empty") == 0) {
             settings_hide_empty = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "disable_sleep") == 0) {
@@ -557,7 +561,8 @@ static void settings_save_file(void) {
     fprintf(f, "brightness=%d\n", settings_brightness);
     fprintf(f, "volume=%d\n", settings_volume);
     fprintf(f, "filter=%s\n", filter_names[settings_filter_idx]);
-    fprintf(f, "auto_resume=%s\n", onoff_names[settings_auto_resume]);
+    fprintf(f, "auto_resume=%s\n", onoff_names[settings_quick_resume]);
+    fprintf(f, "autosave_autoload=%s\n", onoff_names[settings_autosave_autoload]);
     fprintf(f, "animations=%s\n", onoff_names[settings_anim]);
     fprintf(f, "hide_empty=%s\n", onoff_names[settings_hide_empty]);
     fprintf(f, "game_switcher=%s\n", onoff_names[settings_game_switcher]);
@@ -1233,8 +1238,10 @@ static void handle_settings_menu(void) {
             settings_brightness += delta * SETTINGS_BRIGHTNESS_STEP;
             if (settings_brightness < 0)   settings_brightness = 0;
             if (settings_brightness > 100) settings_brightness = 100;
-        } else if (settings_menu_idx == SETTINGS_ROW_AUTORESUME) {
-            settings_auto_resume = (settings_auto_resume + delta + 2) % 2;
+        } else if (settings_menu_idx == SETTINGS_ROW_QUICKRESUME) {
+            settings_quick_resume = (settings_quick_resume + delta + 2) % 2;
+        } else if (settings_menu_idx == SETTINGS_ROW_AUTOSAVE_AUTOLOAD) {
+            settings_autosave_autoload = (settings_autosave_autoload + delta + 2) % 2;
         } else if (settings_menu_idx == SETTINGS_ROW_ANIM) {
             settings_anim = (settings_anim + delta + 2) % 2;
         } else if (settings_menu_idx == SETTINGS_ROW_HIDEEMPTY) {
@@ -1653,68 +1660,76 @@ static void render_settings_menu(void) {
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y2, line, COLOR_TEXT);
     }
-    /* Auto-resume row */
-    snprintf(line, sizeof(line), "Auto-resume: < %s >", onoff_names[settings_auto_resume]);
+    /* Quick Resume row (boot straight into last-played game) */
+    snprintf(line, sizeof(line), "Quick Resume: < %s >", onoff_names[settings_quick_resume]);
     int y3 = y2 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_AUTORESUME) {
+    if (settings_menu_idx == SETTINGS_ROW_QUICKRESUME) {
         render_text_pillbox(framebuffer, PADDING, y3, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y3, line, COLOR_TEXT);
     }
-    /* Animations row */
-    snprintf(line, sizeof(line), "Animations: < %s >", onoff_names[settings_anim]);
+    /* Auto-Save/Auto-Load row (state autosave on pause/quit, autoload on any launch) */
+    snprintf(line, sizeof(line), "Auto-Save/Auto-Load: < %s >", onoff_names[settings_autosave_autoload]);
     int y4 = y3 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_ANIM) {
+    if (settings_menu_idx == SETTINGS_ROW_AUTOSAVE_AUTOLOAD) {
         render_text_pillbox(framebuffer, PADDING, y4, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y4, line, COLOR_TEXT);
     }
-    /* Hide empty folders row */
-    snprintf(line, sizeof(line), "Hide Empty Folders: < %s >", onoff_names[settings_hide_empty]);
+    /* Animations row */
+    snprintf(line, sizeof(line), "Animations: < %s >", onoff_names[settings_anim]);
     int y5 = y4 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_HIDEEMPTY) {
+    if (settings_menu_idx == SETTINGS_ROW_ANIM) {
         render_text_pillbox(framebuffer, PADDING, y5, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y5, line, COLOR_TEXT);
     }
-    /* Game switcher row */
-    snprintf(line, sizeof(line), "Game Switcher: < %s >", onoff_names[settings_game_switcher]);
+    /* Hide empty folders row */
+    snprintf(line, sizeof(line), "Hide Empty Folders: < %s >", onoff_names[settings_hide_empty]);
     int y6 = y5 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_SWITCHER) {
+    if (settings_menu_idx == SETTINGS_ROW_HIDEEMPTY) {
         render_text_pillbox(framebuffer, PADDING, y6, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y6, line, COLOR_TEXT);
     }
-    /* Load to recents row */
-    snprintf(line, sizeof(line), "Start in Recents: < %s >", onoff_names[settings_load_recents]);
+    /* Game switcher row */
+    snprintf(line, sizeof(line), "Game Switcher: < %s >", onoff_names[settings_game_switcher]);
     int y7 = y6 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_LOADRECENTS) {
+    if (settings_menu_idx == SETTINGS_ROW_SWITCHER) {
         render_text_pillbox(framebuffer, PADDING, y7, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y7, line, COLOR_TEXT);
     }
-    /* Button Mapping row */
+    /* Load to recents row */
+    snprintf(line, sizeof(line), "Start in Recents: < %s >", onoff_names[settings_load_recents]);
     int y8 = y7 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_REMAP) {
-        render_text_pillbox(framebuffer, PADDING, y8, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    if (settings_menu_idx == SETTINGS_ROW_LOADRECENTS) {
+        render_text_pillbox(framebuffer, PADDING, y8, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y8, "Button Mapping", COLOR_TEXT);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y8, line, COLOR_TEXT);
+    }
+    /* Button Mapping row */
+    int y9 = y8 + ITEM_HEIGHT;
+    if (settings_menu_idx == SETTINGS_ROW_REMAP) {
+        render_text_pillbox(framebuffer, PADDING, y9, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    } else {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y9, "Button Mapping", COLOR_TEXT);
     }
     /* Volume row (global output gain for all emulators) */
     snprintf(line, sizeof(line), "Volume: < %d%% >", settings_volume);
-    int y9 = y8 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_VOLUME) {
-        render_text_pillbox(framebuffer, PADDING, y9, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-    } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y9, line, COLOR_TEXT);
-    }
-    /* Disable Sleep row (applies after restart — zhijack live-patches cubevol) */
-    snprintf(line, sizeof(line), "Disable Sleep (restart): < %s >", onoff_names[settings_disable_sleep]);
     int y10 = y9 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_NOSLEEP) {
+    if (settings_menu_idx == SETTINGS_ROW_VOLUME) {
         render_text_pillbox(framebuffer, PADDING, y10, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y10, line, COLOR_TEXT);
+    }
+    /* Disable Sleep row (applies after restart — zhijack live-patches cubevol) */
+    snprintf(line, sizeof(line), "Disable Sleep (restart): < %s >", onoff_names[settings_disable_sleep]);
+    int y11 = y10 + ITEM_HEIGHT;
+    if (settings_menu_idx == SETTINGS_ROW_NOSLEEP) {
+        render_text_pillbox(framebuffer, PADDING, y11, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    } else {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y11, line, COLOR_TEXT);
     }
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
