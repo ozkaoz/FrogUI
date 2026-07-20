@@ -456,7 +456,7 @@ static int settings_anim = 1;           /* UI animations: 0=off, 1=on */
 static int settings_hide_empty = 1;     /* hide rom folders with no games: 0=off, 1=on */
 static int settings_game_switcher = 1;  /* recents as box-art carousel: 0=off, 1=on */
 static int settings_load_recents = 0;   /* start FrogUI in the recents view: 0=off, 1=on */
-static int settings_disable_sleep = 0;  /* live-patch cubevol to disable power sleep: 0=off, 1=on. zhijack reads this at boot; applies after restart. */
+static int settings_disable_sleep = 1;  /* live-patch cubevol to disable power sleep: 0=off, 1=on. zhijack reads this at boot; applies after restart. Default ON: R36SX/SF3500-class sleep isn't supported by TreeFrogUI, so ship with it disabled and point users at auto-resume instead. */
 static int settings_volume = 100;       /* global output volume 0..100 → cubegm/sndgain.txt */
 static const char *filter_names[] = {"nearest", "bilinear"};
 static const char *onoff_names[] = {"off", "on"};
