@@ -449,6 +449,13 @@ static int settings_menu_idx = 0;       /* row: 0=theme, 1=font, 2=brightness, 3
 static int settings_theme_idx = 0;
 static int settings_font_idx = 0;
 static int settings_brightness = 75;    /* 0..100, step 5 */
+/* Frames left to re-assert brightness after a cubevol (re)start. cubevol applies
+ * its OWN stored brightness on start, DELAYED by panel/backlight-delay (to avoid
+ * a boot flash) — which lands after our one-shot settings_apply and overrides it
+ * (default brightness on cold boot / return from game). Re-asserting over a short
+ * window outlasts that delayed apply; cubevol then only touches backlight on
+ * hotkeys, so our value sticks. */
+static int settings_bl_reassert = 0;
 static int settings_filter_idx = 1;     /* forced bilinear (option removed from menu) */
 static int settings_filter_idx_on_enter = 0;  /* snapshot for restart-on-change */
 static int settings_quick_resume = 0;      /* boot straight into last game: 0=off, 1=on. Settings key stays "auto_resume" for upgrade compat. */
@@ -495,6 +502,9 @@ static void settings_apply(void) {
     if (font_count > 0)
         font_load_file(font_files[settings_font_idx]);
     cube_set_backlight(settings_brightness);
+    /* Keep cubevol's persistentmem value in sync so its delayed startup apply
+     * shows the right brightness instead of flashing its stored default. */
+    cube_pmem_backlight_sync(settings_brightness);
     banner_set_anim(settings_anim);
     /* Global output volume: there's no system mixer on this hardware, so every
      * frontend (picoarch, pcsx4all, lgpt) reads this percent from sndgain.txt and
@@ -1578,8 +1588,13 @@ void retro_init(void) {
     theme_init();
     dbg("theme_init done");
     settings_load_file();
+    /* Sync cubevol's stored backlight BEFORE restarting it, so the fresh cubevol
+     * reads our value and its delayed startup apply shows the right brightness
+     * (no flash). Must precede fb1_set_visible. */
+    cube_pmem_backlight_sync(settings_brightness);
     fb1_set_visible(1);   /* restart cubevol for OSD overlay — also resets backlight */
     settings_apply();     /* apply AFTER cubevol restart so our brightness wins */
+    settings_bl_reassert = 120; /* re-assert safety net past cubevol's delayed apply */
     dbg("settings loaded");
     recent_games_init();
     dbg("recent_games_init done");
@@ -1823,6 +1838,14 @@ void retro_run(void) {
         input_set_ext_raw(raw);
     }
     handle_input();
+
+    /* Re-assert brightness every frame for a short window after boot so
+     * cubevol's delayed startup apply of its own (default) stored value is
+     * overwritten within one frame instead of flashing visibly. */
+    if (settings_bl_reassert > 0) {
+        cube_set_backlight(settings_brightness);
+        settings_bl_reassert--;
+    }
 
     /* Reload banner when view, path, or selection changes.
      * On the main SYSTEMS menu, preview the highlighted folder's banner. */

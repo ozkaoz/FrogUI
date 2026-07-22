@@ -10,6 +10,14 @@
  * unavailable. */
 void cube_set_backlight(int level);
 
+/* Read cubevol's persistentmem-stored raw backlight (slot 30), -1 on failure. */
+int cube_pmem_backlight_read(void);
+
+/* Sync cubevol's persistentmem-stored backlight to `level` (0..100) so its
+ * delayed startup apply shows the right brightness. Writes EEPROM only on real
+ * change — call on brightness change / boot, NOT every frame. */
+void cube_pmem_backlight_sync(int level);
+
 /* Show or hide the cubevol OSD overlay (/dev/fb1: battery, volume). Frog should
  * always set this to visible on init — picoarch/standalone game code blanks it
  * during gameplay and restores on exit, but if those crash, FrogUI's explicit
