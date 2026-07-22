@@ -101,6 +101,11 @@ void font_init(void) {
     font_load_from_settings("GamePocket");
 }
 
+/* Rasterize glyphs into a static buffer instead of stbtt_GetGlyphBitmap (which
+ * mallocs per glyph per frame). On memory-pressured devices those allocs can
+ * transiently fail -> draw bails -> glyphs vanish for a frame. Ported from the
+ * same fix in picoarch/menu_font.c. No per-frame allocation now. */
+#define GLYPH_MAX 128
 void font_draw_char(uint16_t *framebuffer, int screen_width, int screen_height,
                    int x, int y, char c, uint16_t color) {
     if (!font_loaded || !framebuffer) return;
@@ -114,12 +119,15 @@ void font_draw_char(uint16_t *framebuffer, int screen_width, int screen_height,
     int glyph_index = stbtt_FindGlyphIndex(&font_info, c);
     if (glyph_index == 0) return; // Glyph not found
 
-    // Get glyph bitmap
-    int width, height, xoff, yoff;
-    unsigned char *bitmap = stbtt_GetGlyphBitmap(&font_info, 0, font_scale,
-                                                  glyph_index, &width, &height, &xoff, &yoff);
+    // Get glyph bounds and rasterize into a static scratch buffer
+    int xoff, yoff, x1, y1;
+    stbtt_GetGlyphBitmapBox(&font_info, glyph_index, font_scale, font_scale, &xoff, &yoff, &x1, &y1);
+    int width = x1 - xoff, height = y1 - yoff;
+    if (width <= 0 || height <= 0) return;              // space / empty glyph
+    if (width > GLYPH_MAX || height > GLYPH_MAX) return; // oversized: skip
 
-    if (!bitmap) return;
+    static unsigned char bitmap[GLYPH_MAX * GLYPH_MAX];
+    stbtt_MakeGlyphBitmap(&font_info, bitmap, width, height, width, font_scale, font_scale, glyph_index);
 
     // Get vertical metrics for proper baseline alignment
     int ascent, descent, line_gap;
@@ -152,8 +160,6 @@ void font_draw_char(uint16_t *framebuffer, int screen_width, int screen_height,
             }
         }
     }
-
-    stbtt_FreeBitmap(bitmap, NULL);
 }
 
 /* Vertical metrics for centering: baseline = pixels from glyph-cell top down to
