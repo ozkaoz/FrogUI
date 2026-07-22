@@ -1128,15 +1128,22 @@ static void run_search(void) {
     selected_index = 0; scroll_offset = 0;
 }
 
-static void search_launch(int idx) {
-    if (idx < 0 || idx >= search_results_count) return;
-    const char *path = search_results[idx].path;
+/* Single launch path used by browse, search, favourites, and recents. Resolves
+ * everything from the ROM path so all four agree — favourites/recents used to
+ * launch the stored core_name directly and so missed the ps1-folder → standalone
+ * pcsx4all preference (a ps1 favourite booted pcsx_rearmed instead). */
+static void launch_by_path(const char *path) {
     const char *folder = get_console_folder(path);
-    const char *ov = core_override_lookup(path, NULL);
+    char dir[MAX_PATH_LEN];
+    strncpy(dir, path, sizeof(dir) - 1);
+    dir[sizeof(dir) - 1] = '\0';
+    char *slash = strrchr(dir, '/');
+    if (slash) *slash = '\0';
+    const char *ov = core_override_lookup(path, dir);
     const char *core = ov ? ov : get_core_for_folder(folder);
     if (!core) core = get_core_for_extension(path);
     if (ov)
-        request_game_launch(ov, path);
+        request_game_launch(ov, path);         /* explicit override → libretro */
     else if (core) {
         /* ps1 folder maps to pcsx_rearmed by default but we prefer the standalone
          * pcsx4all when present; every other standalone (pico286/lgpt/rockbox) is
@@ -1148,8 +1155,13 @@ static void search_launch(int idx) {
         else
             request_game_launch(core, path);
     } else {
-        dbg("search: no core mapping for result");
+        dbg("launch: no core mapping for path");
     }
+}
+
+static void search_launch(int idx) {
+    if (idx < 0 || idx >= search_results_count) return;
+    launch_by_path(search_results[idx].path);
 }
 
 static void handle_search_kbd(void) {
@@ -1401,26 +1413,14 @@ static void handle_input(void) {
             /* Launch from favourites list */
             const FavoriteGame *fl = favorites_get_list();
             int fc = favorites_get_count();
-            if (selected_index < fc) {
-                if (is_standalone_bin(fl[selected_index].core_name))
-                    request_standalone_launch(fl[selected_index].core_name,
-                                              fl[selected_index].full_path);
-                else
-                    request_game_launch(fl[selected_index].core_name,
-                                        fl[selected_index].full_path);
-            }
+            if (selected_index < fc)
+                launch_by_path(fl[selected_index].full_path);
         } else if (viewing_recents) {
             /* Launch from recent games list */
             const RecentGame *rg = recent_games_get_list();
             int rc = recent_games_get_count();
-            if (selected_index < rc) {
-                if (is_standalone_bin(rg[selected_index].core_name))
-                    request_standalone_launch(rg[selected_index].core_name,
-                                              rg[selected_index].full_path);
-                else
-                    request_game_launch(rg[selected_index].core_name,
-                                        rg[selected_index].full_path);
-            }
+            if (selected_index < rc)
+                launch_by_path(rg[selected_index].full_path);
         } else if (strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) == 0) {
             /* Enter favourites view */
             const FavoriteGame *fl = favorites_get_list();
@@ -1453,26 +1453,9 @@ static void handle_input(void) {
                 settings_menu_idx = 0;
                 settings_filter_idx_on_enter = settings_filter_idx;
             } else {
-                const char *folder = get_console_folder(current_path);
                 char rom_path[MAX_PATH_LEN];
                 snprintf(rom_path, sizeof(rom_path), "%s/%s", current_path, entries[selected_index].name);
-                /* per-game / per-folder override wins over folder/extension default */
-                const char *ov = core_override_lookup(rom_path, current_path);
-                const char *core = ov ? ov : get_core_for_folder(folder);
-                if (!core)
-                    core = get_core_for_extension(entries[selected_index].name);
-                if (ov) {
-                    request_game_launch(ov, rom_path);   /* override → always libretro */
-                } else if (core) {
-                    if (is_ps1_folder(folder) && access(PCSX4ALL_BIN, F_OK) == 0)
-                        request_standalone_launch(PCSX4ALL_BIN, rom_path);
-                    else if (is_standalone_bin(core) && access(core, F_OK) == 0)
-                        request_standalone_launch(core, rom_path);
-                    else
-                        request_game_launch(core, rom_path);
-                } else {
-                    dbg("no core mapping for this folder or extension");
-                }
+                launch_by_path(rom_path);
             }
         }
     }
