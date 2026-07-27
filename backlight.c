@@ -59,8 +59,11 @@ void cube_set_backlight(int level) {
 
 void fb1_set_visible(int visible) {
     if (!visible) return;
-    /* Restart cubevol — fresh process re-draws battery + volume on /dev/fb1.
-     * Shmem at /tmp/joy_key survives the restart (kernel-owned). */
-    system("killall cubevol 2>/dev/null; /usr/bin/cubevol &");
-    usleep(50000);
+    /* Do NOT kill/restart cubevol: it owns the volume-button gpio, and killing it
+     * (even with a respawn) drops volume control. cubevol stays alive from boot
+     * and repaints the battery/volume OSD on its own next poll (charge-% tick or
+     * a volume press), so the OSD returns without a restart. Only respawn if it
+     * somehow died, so volume always works. */
+    if (system("pidof cubevol >/dev/null 2>&1") != 0)
+        system("/usr/bin/cubevol &");
 }

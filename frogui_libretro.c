@@ -45,6 +45,7 @@ static char g_roms_path[64] = ROMS_PATH_DEFAULT;
 #define PICO286_BIN  SDCARD_BASE "/cubegm/pico286"
 #define LGPT_BIN     SDCARD_BASE "/cubegm/lgpt"
 #define ROCKBOX_BIN  SDCARD_BASE "/cubegm/rockbox.sh"  /* wrapper sets HOME+SDL env */
+#define EBOOK_BIN    SDCARD_BASE "/cubegm/ebook"        /* MuPDF ebook reader (epub/mobi/pdf) */
 
 /* Console → core mapping (folder name → libretro .so)
  * Folder names match /mnt/sdcard/roms/ subdirectories (gb300_multicore convention). */
@@ -108,7 +109,7 @@ static const ConsoleMapping console_mappings[] = {
     {"msx",    CORES_PATH "/bluemsx_libretro.so"},
     /* C64 */
     {"c64",    CORES_PATH "/vice_x64_libretro.so"},
-    {"c64sc",  CORES_PATH "/vice_x64sc_libretro.so"},
+    {"c64sc",  CORES_PATH "/vice_x64_libretro.so"},   /* only x64 built; x64sc not compiled */
     {"c64f",   CORES_PATH "/frodo_libretro.so"},
     {"c64fc",  CORES_PATH "/frodo_libretro.so"},
     {"vic20",  CORES_PATH "/vice_xvic_libretro.so"},
@@ -137,6 +138,8 @@ static const ConsoleMapping console_mappings[] = {
     {"pico286", PICO286_BIN},                        /* DOS PC (standalone, launched directly) */
     {"lgpt",   LGPT_BIN},                            /* LittleGPTracker (standalone, launched directly) */
     {"rockbox", ROCKBOX_BIN},                        /* Rockbox music player (standalone) */
+    {"Ebook",  EBOOK_BIN},                           /* ebook reader (epub/mobi/pdf, standalone) */
+    {"ebook",  EBOOK_BIN},
     {"fake08", CORES_PATH "/fake08_libretro.so"},   /* legacy folder name */
     {"lowres-nx", CORES_PATH "/lowresnx_libretro.so"},
     {"tic80",  CORES_PATH "/tic80_libretro.so"},   /* TIC-80 fantasy console (.tic carts) */
@@ -361,6 +364,7 @@ static int search_results_count = 0, search_results_cap = 0;
 static bool core_picker_active = false;
 static int  core_picker_idx = 0;
 static int  core_picker_scroll = 0;
+static int  core_picker_current = 0;   /* index of the ACTIVE core (marked ">>") */
 static char core_picker_key[MAX_PATH_LEN];   /* ROM path (per-game) or folder path */
 static char core_picker_title[160];          /* shown under header */
 
@@ -1043,7 +1047,8 @@ static bool is_standalone_bin(const char *name) {
     return name && (strcmp(name, PCSX4ALL_BIN) == 0 ||
                     strcmp(name, PICO286_BIN)  == 0 ||
                     strcmp(name, LGPT_BIN)     == 0 ||
-                    strcmp(name, ROCKBOX_BIN)  == 0);
+                    strcmp(name, ROCKBOX_BIN)  == 0 ||
+                    strcmp(name, EBOOK_BIN)    == 0);
 }
 
 /* ----------------------------- Search (X button) ----------------------------- */
@@ -1194,6 +1199,11 @@ static void handle_search_kbd(void) {
     }
 }
 
+/* Rows the picker actually draws: one VISIBLE_ENTRIES slot is used by the
+ * subtitle (see render_core_picker), so scroll math must match or the cursor
+ * lands on an undrawn row and vanishes. */
+#define PICKER_ROWS ((VISIBLE_ENTRIES - 1) < 1 ? 1 : (VISIBLE_ENTRIES - 1))
+
 static void handle_core_picker(void) {
     if (input_was_pressed(FROG_BTN_UP)) {
         core_picker_idx = (core_picker_idx - 1 + core_choice_count) % core_choice_count;
@@ -1202,17 +1212,17 @@ static void handle_core_picker(void) {
         core_picker_idx = (core_picker_idx + 1) % core_choice_count;
     }
     if (input_was_pressed(FROG_BTN_LEFT)) {
-        core_picker_idx -= VISIBLE_ENTRIES;
+        core_picker_idx -= PICKER_ROWS;
         if (core_picker_idx < 0) core_picker_idx = 0;
     }
     if (input_was_pressed(FROG_BTN_RIGHT)) {
-        core_picker_idx += VISIBLE_ENTRIES;
+        core_picker_idx += PICKER_ROWS;
         if (core_picker_idx >= core_choice_count) core_picker_idx = core_choice_count - 1;
     }
     if (core_picker_idx < core_picker_scroll)
         core_picker_scroll = core_picker_idx;
-    if (core_picker_idx >= core_picker_scroll + VISIBLE_ENTRIES)
-        core_picker_scroll = core_picker_idx - VISIBLE_ENTRIES + 1;
+    if (core_picker_idx >= core_picker_scroll + PICKER_ROWS)
+        core_picker_scroll = core_picker_idx - PICKER_ROWS + 1;
     if (input_was_pressed(FROG_BTN_A)) {
         core_override_set(core_picker_key, core_choices[core_picker_idx].path);
         core_picker_active = false;
@@ -1357,9 +1367,10 @@ static void handle_input(void) {
             cur = core_override_lookup(core_picker_key, NULL);
         }
         core_picker_idx = core_choice_index_for_path(cur);
+        core_picker_current = core_picker_idx;   /* the active core, marked ">>" */
         core_picker_scroll = 0;
-        if (core_picker_idx >= VISIBLE_ENTRIES)
-            core_picker_scroll = core_picker_idx - VISIBLE_ENTRIES + 1;
+        if (core_picker_idx >= PICKER_ROWS)
+            core_picker_scroll = core_picker_idx - PICKER_ROWS + 1;
         core_picker_active = true;
         return;
     }
@@ -1760,12 +1771,13 @@ static void render_core_picker(void) {
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, core_picker_title, COLOR_TEXT);
     y += ITEM_HEIGHT;
 
-    int rows = VISIBLE_ENTRIES - 1;   /* one row used by the subtitle */
-    if (rows < 1) rows = 1;
-    int visible = min(core_choice_count - core_picker_scroll, rows);
+    int visible = min(core_choice_count - core_picker_scroll, PICKER_ROWS);
     for (int i = 0; i < visible; i++) {
         int idx = core_picker_scroll + i;
-        const char *line = core_choices[idx].name;
+        /* ">> " marks the currently-active core; "   " keeps names aligned. */
+        char line[96];
+        snprintf(line, sizeof(line), "%s%s",
+                 idx == core_picker_current ? ">> " : "   ", core_choices[idx].name);
         int ry = y + i * ITEM_HEIGHT;
         if (idx == core_picker_idx)
             render_text_pillbox(framebuffer, PADDING, ry, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
