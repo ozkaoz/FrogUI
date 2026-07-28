@@ -178,7 +178,8 @@ void render_header(uint16_t *framebuffer, const char *title) {
     // Draw folder/section name in header area
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, 10, title, COLOR_HEADER);
 
-    // Battery indicator, top-right (our own; cubevol's is hidden)
+    // Battery indicator, top-right (our own; cubevol's battery glyph is hidden).
+    // Volume popup stays cubevol's (custom fb1 popup blinks - see osd doc).
     { extern int frogui_battery_pct(void); render_battery(framebuffer, frogui_battery_pct()); }
 }
 

@@ -13,6 +13,9 @@ void cube_set_backlight(int level);
 /* Read cubevol's persistentmem-stored raw backlight (slot 30), -1 on failure. */
 int cube_pmem_backlight_read(void);
 
+/* Read cubevol's persistentmem-stored snd volume (0..100-ish), -1 on failure. */
+int cube_pmem_volume_read(void);
+
 /* Sync cubevol's persistentmem-stored backlight to `level` (0..100) so its
  * delayed startup apply shows the right brightness. Writes EEPROM only on real
  * change — call on brightness change / boot, NOT every frame. */

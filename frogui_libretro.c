@@ -378,9 +378,10 @@ static void dbg(const char *msg) {
     fprintf(stderr, "FROGUI_DBG: %s\n", msg);
 }
 
-/* Hide cubevol's own battery glyph (top-right of the /dev/fb1 overlay) while
- * leaving its volume popup (drawn elsewhere) intact: zero just that corner rect.
- * cubevol has no signal handler, so clearing once per frame keeps it hidden. */
+/* Hide cubevol's battery glyph (top-right of fb1) while leaving its volume popup
+ * (center) intact - our custom volume popup blinks against the hw-composited
+ * overlay (see docs/osd-battery-volume.md), so we keep cubevol's. Zero just the
+ * top-right corner each frame. */
 static void fb1_clear_battery_zone(void) {
     int fd = open("/dev/fb1", O_RDWR);
     if (fd < 0) return;
@@ -392,7 +393,6 @@ static void fb1_clear_battery_zone(void) {
         if (mem != MAP_FAILED) {
             int bpp = vi.bits_per_pixel / 8; if (bpp < 1) bpp = 4;
             int pitch = fi.line_length ? (int)fi.line_length : (int)vi.xres * bpp;
-            /* top-right ~1/4 width x top 12% height = the stock battery corner */
             int zx = vi.xres * 3 / 4, zw = vi.xres - zx;
             int zh = vi.yres / 8; if (zh < 24) zh = 24;
             for (int y = 0; y < zh && y < (int)vi.yres; y++)

@@ -33,6 +33,19 @@ int cube_pmem_backlight_read(void) {
     return value & 0xFF;
 }
 
+/* Read cubevol's stored snd volume from persistentmem, or -1. RE'd from cubevol
+ * avparam_get_volume: same GET ioctl, req{flag=3,id=0,len=260}, volume = buf[0]. */
+int cube_pmem_volume_read(void) {
+    int fd = open("/dev/persistentmem", O_RDWR);
+    if (fd < 0) return -1;
+    unsigned char buf[260] = {0};
+    struct pmem_req req = { 3, 0, 260, 0, buf };
+    int rv = ioctl(fd, PMEM_GET_BACKLIGHT, &req);   /* 0x400c2602 GET */
+    close(fd);
+    if (rv < 0) return -1;
+    return buf[0];
+}
+
 /* Sync cubevol's stored raw backlight so its DELAYED startup apply already shows
  * the right brightness (no flash to our re-assert). persistentmem is EEPROM-like:
  * write ONLY on real change, never per frame. No-op if already correct. */
