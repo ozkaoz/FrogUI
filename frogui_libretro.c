@@ -466,6 +466,9 @@ static int settings_quick_resume = 0;      /* boot straight into last game: 0=of
 static int settings_autosave_autoload = 0; /* auto-save on pause/quit + auto-load on any game launch (boot or manual pick): 0=off, 1=on */
 static int settings_anim = 1;           /* UI animations: 0=off, 1=on */
 static int settings_hide_empty = 1;     /* hide rom folders with no games: 0=off, 1=on */
+static int settings_hide_extensions = 1; /* hide file extensions in the browser: 0=off, 1=on */
+static int settings_backgrounds = 1;     /* show per-system background images: 0=off (solid theme bg), 1=on */
+static int settings_folder_cache = 1;    /* cache folder listings (mtime-keyed) for fast nav: 0=off, 1=on */
 static int settings_game_switcher = 1;  /* recents as box-art carousel: 0=off, 1=on */
 static int settings_load_recents = 0;   /* start FrogUI in the recents view: 0=off, 1=on */
 static int settings_disable_sleep = 1;  /* live-patch cubevol to disable power sleep: 0=off, 1=on. zhijack reads this at boot; applies after restart. Default ON: R36SX/SF3500-class sleep isn't supported by TreeFrogUI, so ship with it disabled and point users at Quick Resume instead. */
@@ -475,16 +478,44 @@ static const char *onoff_names[] = {"off", "on"};
 #define FILTER_COUNT 2
 #define SETTINGS_BRIGHTNESS_STEP 5
 /* Filter option removed from the menu — always bilinear (HW path). */
-#define SETTINGS_ROW_COUNT 12
-#define SETTINGS_ROW_QUICKRESUME 3
-#define SETTINGS_ROW_AUTOSAVE_AUTOLOAD 4
-#define SETTINGS_ROW_ANIM 5
-#define SETTINGS_ROW_HIDEEMPTY 6
-#define SETTINGS_ROW_SWITCHER 7
-#define SETTINGS_ROW_LOADRECENTS 8
-#define SETTINGS_ROW_REMAP 9
-#define SETTINGS_ROW_VOLUME 10
-#define SETTINGS_ROW_NOSLEEP 11
+
+/* Data-driven settings menu: rows are HEADERs (non-selectable dividers) or
+ * options. Adding, reordering, or grouping = just editing this table; the nav,
+ * adjust, and render code all iterate it. TOGGLE/RANGE point at their int; THEME
+ * and FONT are special (dynamic option lists); ACTION opens the remap wizard. */
+typedef enum { RT_HEADER, RT_TOGGLE, RT_RANGE, RT_THEME, RT_FONT, RT_ACTION } SRowType;
+typedef struct {
+    SRowType type;
+    const char *label;
+    int *val;               /* TOGGLE / RANGE target */
+    int rmin, rmax, rstep;  /* RANGE bounds */
+} SRow;
+
+static const SRow settings_rows[] = {
+    { RT_HEADER, "APPEARANCE" },
+    { RT_THEME,  "Theme" },
+    { RT_FONT,   "Font" },
+    { RT_RANGE,  "Brightness", &settings_brightness, 0, 100, SETTINGS_BRIGHTNESS_STEP },
+    { RT_TOGGLE, "Animations", &settings_anim },
+    { RT_TOGGLE, "Background Images", &settings_backgrounds },
+    { RT_TOGGLE, "Hide Extensions", &settings_hide_extensions },
+    { RT_TOGGLE, "Hide Empty Folders", &settings_hide_empty },
+    { RT_HEADER, "LIBRARY" },
+    { RT_TOGGLE, "Game Switcher", &settings_game_switcher },
+    { RT_TOGGLE, "Start in Recents", &settings_load_recents },
+    { RT_HEADER, "GAMEPLAY" },
+    { RT_TOGGLE, "Quick Resume", &settings_quick_resume },
+    { RT_TOGGLE, "Auto-Save/Auto-Load", &settings_autosave_autoload },
+    { RT_HEADER, "SYSTEM" },
+    { RT_RANGE,  "Volume", &settings_volume, 0, 100, 5 },
+    { RT_TOGGLE, "Folder Cache", &settings_folder_cache },
+    { RT_TOGGLE, "Disable Sleep (restart)", &settings_disable_sleep },
+    { RT_ACTION, "Button Mapping" },
+};
+#define SETTINGS_ROW_N ((int)(sizeof(settings_rows) / sizeof(settings_rows[0])))
+static int settings_row_selectable(int i) {
+    return i >= 0 && i < SETTINGS_ROW_N && settings_rows[i].type != RT_HEADER;
+}
 
 static bool remap_wizard_active = false;
 static int  remap_step = 0;
@@ -554,6 +585,12 @@ static void settings_load_file(void) {
             settings_autosave_autoload = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "hide_empty") == 0) {
             settings_hide_empty = (strcmp(val, "on") == 0) ? 1 : 0;
+        } else if (strcmp(line, "hide_extensions") == 0) {
+            settings_hide_extensions = (strcmp(val, "on") == 0) ? 1 : 0;
+        } else if (strcmp(line, "backgrounds") == 0) {
+            settings_backgrounds = (strcmp(val, "on") == 0) ? 1 : 0;
+        } else if (strcmp(line, "folder_cache") == 0) {
+            settings_folder_cache = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "disable_sleep") == 0) {
             settings_disable_sleep = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "game_switcher") == 0) {
@@ -579,6 +616,9 @@ static void settings_save_file(void) {
     fprintf(f, "autosave_autoload=%s\n", onoff_names[settings_autosave_autoload]);
     fprintf(f, "animations=%s\n", onoff_names[settings_anim]);
     fprintf(f, "hide_empty=%s\n", onoff_names[settings_hide_empty]);
+    fprintf(f, "hide_extensions=%s\n", onoff_names[settings_hide_extensions]);
+    fprintf(f, "backgrounds=%s\n", onoff_names[settings_backgrounds]);
+    fprintf(f, "folder_cache=%s\n", onoff_names[settings_folder_cache]);
     fprintf(f, "game_switcher=%s\n", onoff_names[settings_game_switcher]);
     fprintf(f, "load_recents=%s\n", onoff_names[settings_load_recents]);
     fprintf(f, "disable_sleep=%s\n", onoff_names[settings_disable_sleep]);
@@ -622,6 +662,7 @@ static const char* get_console_folder(const char *path) {
 #define BANNER_DIR SDCARD_BASE "/frogui"
 
 static void load_banner_for_view(const char *path, bool is_recents, bool is_favourites) {
+    if (!settings_backgrounds) { banner_clear(); return; }   /* solid theme bg */
     char img[512];
     const char *exts[] = { "png", "jpg", "jpeg", "bmp", NULL };
     if (is_recents) {
@@ -653,6 +694,31 @@ static void load_banner_for_view(const char *path, bool is_recents, bool is_favo
 
 /* True if `path` contains at least one game (any file that isn't artwork/metadata),
  * recursing into subfolders. Used to hide empty rom folders. Bounded depth. */
+/* Directory test without a stat() syscall where the filesystem already knows the
+ * type (FAT/ext fill dirent.d_type). Falls back to stat() only for DT_UNKNOWN.
+ * stat() per file was the main scan cost on cards with thousands of ROMs. */
+static int dirent_is_dir(const char *parent, const struct dirent *e) {
+#ifdef DT_DIR
+    if (e->d_type == DT_DIR) return 1;
+    if (e->d_type == DT_REG || e->d_type == DT_LNK) {
+        if (e->d_type == DT_REG) return 0;   /* known file */
+    }
+    if (e->d_type != DT_UNKNOWN && e->d_type != DT_LNK) return 0;
+#endif
+    char full[MAX_PATH_LEN];
+    snprintf(full, sizeof full, "%s/%s", parent, e->d_name);
+    struct stat st;
+    if (stat(full, &st) != 0) return -1;     /* unreadable: caller skips */
+    return S_ISDIR(st.st_mode) ? 1 : 0;
+}
+
+/* dirs first, then case-insensitive alpha. */
+static int direntry_cmp(const void *a, const void *b) {
+    const DirEntry *x = a, *y = b;
+    if (x->is_dir != y->is_dir) return y->is_dir - x->is_dir;
+    return strcasecmp(x->name, y->name);
+}
+
 static int folder_has_games(const char *path, int depth) {
     if (depth > 3) return 0;
     DIR *d = opendir(path);
@@ -661,11 +727,11 @@ static int folder_has_games(const char *path, int depth) {
     int found = 0;
     while ((e = readdir(d)) != NULL) {
         if (e->d_name[0] == '.') continue;
-        char full[MAX_PATH_LEN];
-        snprintf(full, sizeof(full), "%s/%s", path, e->d_name);
-        struct stat st;
-        if (stat(full, &st) != 0) continue;
-        if (S_ISDIR(st.st_mode)) {
+        int isdir = dirent_is_dir(path, e);
+        if (isdir < 0) continue;
+        if (isdir) {
+            char full[MAX_PATH_LEN];
+            snprintf(full, sizeof(full), "%s/%s", path, e->d_name);
             if (folder_has_games(full, depth + 1)) { found = 1; break; }
         } else {
             size_t nlen = strlen(e->d_name);
@@ -682,55 +748,160 @@ static int folder_has_games(const char *path, int depth) {
     return found;
 }
 
+/* ---- Folder listing cache (OnionOS-style, defensive) ----------------------
+ * Skip the readdir + per-folder empty-check + sort on a repeat visit when the
+ * directory hasn't changed. Keyed on the directory's mtime: adding/removing a
+ * file bumps mtime, so a stale cache can't survive a real change. Every read is
+ * bounds-checked; ANY inconsistency (bad magic, path mismatch, mtime/hide_empty
+ * change, short/corrupt file, alloc fail) falls through to a full rescan, which
+ * then rewrites the cache. Cache lives in frogui/.cache/, never in the rom dirs,
+ * and the whole feature is behind settings_folder_cache so it can be turned off. */
+#define CACHE_DIR   SETTINGS_DIR "/.cache"
+#define CACHE_MAGIC 0x32435546u    /* "FUC2" */
+#define CACHE_MAX_ENTRIES 100000   /* sanity cap to reject a corrupt count */
+
+static void cache_file_for(const char *path, char *out, size_t n) {
+    /* djb2 hash of the path -> stable filename (exact path re-checked on load,
+     * so a hash collision can't return the wrong listing). */
+    unsigned long h = 5381;
+    for (const unsigned char *p = (const unsigned char *)path; *p; p++)
+        h = ((h << 5) + h) ^ *p;
+    snprintf(out, n, CACHE_DIR "/%08lx.bin", h & 0xffffffffUL);
+}
+
+/* Fill entries[]/entry_count from cache if valid for (path, mtime, hide_empty).
+ * Returns 1 on a good hit, 0 to force a rescan. */
+static int cache_load(const char *path, uint64_t mtime, int at_root) {
+    char cf[MAX_PATH_LEN];
+    cache_file_for(path, cf, sizeof cf);
+    FILE *f = fopen(cf, "rb");
+    if (!f) return 0;
+    int ok = 0;
+    uint32_t magic = 0, npath = 0, hide = 0, count = 0;
+    uint64_t m = 0;
+    char pbuf[MAX_PATH_LEN];
+    if (fread(&magic, 4, 1, f) != 1 || magic != CACHE_MAGIC) goto done;
+    if (fread(&m, 8, 1, f) != 1 || m != mtime) goto done;
+    if (fread(&hide, 4, 1, f) != 1) goto done;
+    /* hide_empty only changes the ROOT listing; ignore it elsewhere. */
+    if (at_root && hide != (uint32_t)(settings_hide_empty ? 1 : 0)) goto done;
+    if (fread(&npath, 4, 1, f) != 1 || npath == 0 || npath >= sizeof pbuf) goto done;
+    if (fread(pbuf, 1, npath, f) != npath) goto done;
+    pbuf[npath] = '\0';
+    if (strcmp(pbuf, path) != 0) goto done;              /* collision guard */
+    if (fread(&count, 4, 1, f) != 1 || count > CACHE_MAX_ENTRIES) goto done;
+
+    entry_count = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        uint8_t isdir; uint16_t nlen;
+        if (fread(&isdir, 1, 1, f) != 1) goto done;
+        if (fread(&nlen, 2, 1, f) != 1 || nlen > 255) goto done;
+        if (entry_count >= entry_capacity) {
+            int nc = entry_capacity ? entry_capacity * 2 : INITIAL_ENTRIES_CAPACITY;
+            DirEntry *ne = realloc(entries, nc * sizeof(DirEntry));
+            if (!ne) goto done;
+            entries = ne; entry_capacity = nc;
+        }
+        if (fread(entries[entry_count].name, 1, nlen, f) != nlen) goto done;
+        entries[entry_count].name[nlen] = '\0';
+        entries[entry_count].is_dir = isdir ? 1 : 0;
+        entry_count++;
+    }
+    ok = 1;
+done:
+    fclose(f);
+    if (!ok) entry_count = 0;   /* partial read: discard, caller rescans */
+    return ok;
+}
+
+static void cache_store(const char *path, uint64_t mtime, int at_root) {
+    mkdir(CACHE_DIR, 0755);
+    char cf[MAX_PATH_LEN], tmp[MAX_PATH_LEN];
+    cache_file_for(path, cf, sizeof cf);
+    snprintf(tmp, sizeof tmp, "%s.tmp", cf);
+    FILE *f = fopen(tmp, "wb");
+    if (!f) return;                 /* can't write cache: not fatal, just skip */
+    uint32_t magic = CACHE_MAGIC, hide = at_root ? (settings_hide_empty ? 1 : 0) : 0;
+    uint32_t npath = (uint32_t)strlen(path), count = (uint32_t)entry_count;
+    int good = 1;
+    good &= fwrite(&magic, 4, 1, f) == 1;
+    good &= fwrite(&mtime, 8, 1, f) == 1;
+    good &= fwrite(&hide, 4, 1, f) == 1;
+    good &= fwrite(&npath, 4, 1, f) == 1;
+    good &= fwrite(path, 1, npath, f) == npath;
+    good &= fwrite(&count, 4, 1, f) == 1;
+    for (int i = 0; good && i < entry_count; i++) {
+        uint8_t isdir = entries[i].is_dir ? 1 : 0;
+        uint16_t nlen = (uint16_t)strlen(entries[i].name);
+        good &= fwrite(&isdir, 1, 1, f) == 1;
+        good &= fwrite(&nlen, 2, 1, f) == 1;
+        good &= fwrite(entries[i].name, 1, nlen, f) == nlen;
+    }
+    fclose(f);
+    if (good) rename(tmp, cf);      /* atomic swap; a half-write never gets read */
+    else      unlink(tmp);
+}
+
 static void scan_directory(const char *path) {
     /* An unopenable dir is NOT an early return: fall through with an empty
      * listing so the root still gets its Settings/Recents rows. The old
      * early-return left entries == NULL while the renderer drew the list →
      * NULL deref (SIGBUS addr=0) and a boot crash-loop on cards without roms/. */
-    DIR *dir = opendir(path);
     entry_count = 0;
-    struct dirent *e;
-    while (dir && (e = readdir(dir)) != NULL) {
-        if (e->d_name[0] == '.') continue;
-        struct stat st;
-        char full[MAX_PATH_LEN];
-        snprintf(full, sizeof(full), "%s/%s", path, e->d_name);
-        if (stat(full, &st) != 0) continue;
-        if (!S_ISDIR(st.st_mode)) {
-            const char *ext = strrchr(e->d_name, '.');
-            /* PICO-8 carts are .p8.png — keep them; only skip plain .png artwork. */
-            size_t nlen = strlen(e->d_name);
-            int is_p8png = nlen >= 7 && strcasecmp(e->d_name + nlen - 7, ".p8.png") == 0;
-            if (ext && !is_p8png &&
-                       (strcasecmp(ext,".csv")==0 || strcasecmp(ext,".txt")==0 ||
-                        strcasecmp(ext,".xml")==0 || strcasecmp(ext,".jpg")==0 ||
-                        strcasecmp(ext,".png")==0)) continue;
-        }
-        /* Always hide the internal "menu" folder at the root. */
-        if (S_ISDIR(st.st_mode) && strcmp(path, ROMS_PATH) == 0 &&
-            strcasecmp(e->d_name, "menu") == 0) continue;
-        /* Hide-empty-folders: at the root, skip rom folders with no games. */
-        if (S_ISDIR(st.st_mode) && settings_hide_empty &&
-            strcmp(path, ROMS_PATH) == 0 && !folder_has_games(full, 0)) continue;
-        if (entry_count >= entry_capacity) {
-            entry_capacity = entry_capacity ? entry_capacity*2 : INITIAL_ENTRIES_CAPACITY;
-            entries = realloc(entries, entry_capacity * sizeof(DirEntry));
-            if (!entries) { closedir(dir); return; }
-        }
-        strncpy(entries[entry_count].name, e->d_name, 255);
-        entries[entry_count].name[255] = '\0';
-        entries[entry_count].is_dir = S_ISDIR(st.st_mode);
-        entry_count++;
-    }
-    if (dir) closedir(dir);
-    /* Sort: dirs first, then alpha */
-    for (int i = 0; i < entry_count-1; i++)
-        for (int j = i+1; j < entry_count; j++)
-            if (entries[i].is_dir < entries[j].is_dir ||
-                (entries[i].is_dir == entries[j].is_dir &&
-                 strcasecmp(entries[i].name, entries[j].name) > 0)) {
-                DirEntry tmp = entries[i]; entries[i] = entries[j]; entries[j] = tmp;
+    int at_root = strcmp(path, ROMS_PATH) == 0;
+
+    /* Cache fast path: if the dir is unchanged (mtime match), load the sorted
+     * listing from disk and skip readdir/stat/empty-check/sort entirely. */
+    struct stat dst;
+    int have_mtime = (stat(path, &dst) == 0);
+    int cached = settings_folder_cache && have_mtime &&
+                 cache_load(path, (uint64_t)dst.st_mtime, at_root);
+
+    if (!cached) {
+        DIR *dir = opendir(path);
+        struct dirent *e;
+        while (dir && (e = readdir(dir)) != NULL) {
+            if (e->d_name[0] == '.') continue;
+            int isdir = dirent_is_dir(path, e);   /* d_type, stat() only if unknown */
+            if (isdir < 0) continue;
+            if (!isdir) {
+                const char *ext = strrchr(e->d_name, '.');
+                /* PICO-8 carts are .p8.png — keep them; only skip plain .png artwork. */
+                size_t nlen = strlen(e->d_name);
+                int is_p8png = nlen >= 7 && strcasecmp(e->d_name + nlen - 7, ".p8.png") == 0;
+                if (ext && !is_p8png &&
+                           (strcasecmp(ext,".csv")==0 || strcasecmp(ext,".txt")==0 ||
+                            strcasecmp(ext,".xml")==0 || strcasecmp(ext,".jpg")==0 ||
+                            strcasecmp(ext,".png")==0)) continue;
             }
+            /* Always hide the internal "menu" folder at the root. */
+            if (isdir && at_root && strcasecmp(e->d_name, "menu") == 0) continue;
+            /* Hide-empty-folders: at the root, skip rom folders with no games.
+             * Only reached for the handful of root folders, never per-ROM. */
+            if (isdir && settings_hide_empty && at_root) {
+                char full[MAX_PATH_LEN];
+                snprintf(full, sizeof(full), "%s/%s", path, e->d_name);
+                if (!folder_has_games(full, 0)) continue;
+            }
+            if (entry_count >= entry_capacity) {
+                entry_capacity = entry_capacity ? entry_capacity*2 : INITIAL_ENTRIES_CAPACITY;
+                entries = realloc(entries, entry_capacity * sizeof(DirEntry));
+                if (!entries) { closedir(dir); return; }
+            }
+            strncpy(entries[entry_count].name, e->d_name, 255);
+            entries[entry_count].name[255] = '\0';
+            entries[entry_count].is_dir = isdir;
+            entry_count++;
+        }
+        if (dir) closedir(dir);
+        /* Sort: dirs first, then alpha. qsort (n log n) — the old n^2 bubble sort
+         * made large folders (thousands of ROMs) crawl. */
+        if (entry_count > 1)
+            qsort(entries, entry_count, sizeof(DirEntry), direntry_cmp);
+        /* Persist the freshly-scanned listing for next time. */
+        if (settings_folder_cache && have_mtime)
+            cache_store(path, (uint64_t)dst.st_mtime, at_root);
+    }
     /* Append Settings at end, prepend Recents+Favourites at top */
     if (strcmp(path, ROMS_PATH) == 0) {
         int has_recents = recent_games_get_count() > 0 ? 1 : 0;
@@ -1255,50 +1426,51 @@ static void handle_remap_wizard(void) {
 
 static void handle_settings_menu(void) {
     extern const int theme_count;
-    if (input_was_pressed(FROG_BTN_UP))
-        settings_menu_idx = (settings_menu_idx - 1 + SETTINGS_ROW_COUNT) % SETTINGS_ROW_COUNT;
-    if (input_was_pressed(FROG_BTN_DOWN))
-        settings_menu_idx = (settings_menu_idx + 1) % SETTINGS_ROW_COUNT;
+    /* Land on a real option, never a header. */
+    if (!settings_row_selectable(settings_menu_idx)) {
+        settings_menu_idx = 1;
+        while (settings_menu_idx < SETTINGS_ROW_N && !settings_row_selectable(settings_menu_idx))
+            settings_menu_idx++;
+    }
+    if (input_was_pressed(FROG_BTN_UP)) {
+        do { settings_menu_idx = (settings_menu_idx - 1 + SETTINGS_ROW_N) % SETTINGS_ROW_N; }
+        while (!settings_row_selectable(settings_menu_idx));
+    }
+    if (input_was_pressed(FROG_BTN_DOWN)) {
+        do { settings_menu_idx = (settings_menu_idx + 1) % SETTINGS_ROW_N; }
+        while (!settings_row_selectable(settings_menu_idx));
+    }
     if (input_was_pressed(FROG_BTN_LEFT) || input_was_pressed(FROG_BTN_RIGHT)) {
         int delta = input_was_pressed(FROG_BTN_RIGHT) ? 1 : -1;
-        if (settings_menu_idx == 0) {
+        const SRow *r = &settings_rows[settings_menu_idx];
+        switch (r->type) {
+        case RT_THEME:
             settings_theme_idx = (settings_theme_idx + delta + theme_count) % theme_count;
-        } else if (settings_menu_idx == 1) {
+            break;
+        case RT_FONT:
             if (font_count > 0)
                 settings_font_idx = (settings_font_idx + delta + font_count) % font_count;
-        } else if (settings_menu_idx == 2) {
-            settings_brightness += delta * SETTINGS_BRIGHTNESS_STEP;
-            if (settings_brightness < 0)   settings_brightness = 0;
-            if (settings_brightness > 100) settings_brightness = 100;
-        } else if (settings_menu_idx == SETTINGS_ROW_QUICKRESUME) {
-            settings_quick_resume = (settings_quick_resume + delta + 2) % 2;
-        } else if (settings_menu_idx == SETTINGS_ROW_AUTOSAVE_AUTOLOAD) {
-            settings_autosave_autoload = (settings_autosave_autoload + delta + 2) % 2;
-        } else if (settings_menu_idx == SETTINGS_ROW_ANIM) {
-            settings_anim = (settings_anim + delta + 2) % 2;
-        } else if (settings_menu_idx == SETTINGS_ROW_HIDEEMPTY) {
-            settings_hide_empty = (settings_hide_empty + delta + 2) % 2;
-        } else if (settings_menu_idx == SETTINGS_ROW_SWITCHER) {
-            settings_game_switcher = (settings_game_switcher + delta + 2) % 2;
-        } else if (settings_menu_idx == SETTINGS_ROW_LOADRECENTS) {
-            settings_load_recents = (settings_load_recents + delta + 2) % 2;
-        } else if (settings_menu_idx == SETTINGS_ROW_VOLUME) {
-            settings_volume += delta * 5;
-            if (settings_volume < 0)   settings_volume = 0;
-            if (settings_volume > 100) settings_volume = 100;
-        } else if (settings_menu_idx == SETTINGS_ROW_NOSLEEP) {
-            settings_disable_sleep = (settings_disable_sleep + delta + 2) % 2;
+            break;
+        case RT_TOGGLE:
+            *r->val = (*r->val + delta + 2) % 2;
+            break;
+        case RT_RANGE:
+            *r->val += delta * r->rstep;
+            if (*r->val < r->rmin) *r->val = r->rmin;
+            if (*r->val > r->rmax) *r->val = r->rmax;
+            break;
+        default: break;
         }
         settings_apply();
     }
-    if (input_was_pressed(FROG_BTN_A) && settings_menu_idx == SETTINGS_ROW_REMAP) {
+    if (input_was_pressed(FROG_BTN_A) && settings_rows[settings_menu_idx].type == RT_ACTION) {
         remap_step = 0;
         remap_prev_raw = input_get_raw_state();
         remap_wizard_active = true;
         settings_menu_active = false;
         return;
     }
-    if ((input_was_pressed(FROG_BTN_A) && settings_menu_idx != SETTINGS_ROW_REMAP) ||
+    if ((input_was_pressed(FROG_BTN_A) && settings_rows[settings_menu_idx].type != RT_ACTION) ||
          input_was_pressed(FROG_BTN_B)) {
         settings_save_file();
         settings_menu_active = false;
@@ -1644,101 +1816,41 @@ static void render_settings_menu(void) {
     render_header(framebuffer, "SETTINGS");
 
     char line[128];
-    int y0 = START_Y;
-    /* Theme row */
-    snprintf(line, sizeof(line), "Theme: < %s >", themes[settings_theme_idx].name);
-    if (settings_menu_idx == 0) {
-        render_text_pillbox(framebuffer, PADDING, y0, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-    } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y0, line, COLOR_TEXT);
-    }
-    /* Font row */
-    snprintf(line, sizeof(line), "Font: < %s >",
-             font_count > 0 ? font_disp[settings_font_idx] : "(none)");
-    int y1 = y0 + ITEM_HEIGHT;
-    if (settings_menu_idx == 1) {
-        render_text_pillbox(framebuffer, PADDING, y1, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-    } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y1, line, COLOR_TEXT);
-    }
-    /* Brightness row */
-    snprintf(line, sizeof(line), "Brightness: < %d%% >", settings_brightness);
-    int y2 = y1 + ITEM_HEIGHT;
-    if (settings_menu_idx == 2) {
-        render_text_pillbox(framebuffer, PADDING, y2, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-    } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y2, line, COLOR_TEXT);
-    }
-    /* Quick Resume row (boot straight into last-played game) */
-    snprintf(line, sizeof(line), "Quick Resume: < %s >", onoff_names[settings_quick_resume]);
-    int y3 = y2 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_QUICKRESUME) {
-        render_text_pillbox(framebuffer, PADDING, y3, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-    } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y3, line, COLOR_TEXT);
-    }
-    /* Auto-Save/Auto-Load row (state autosave on pause/quit, autoload on any launch) */
-    snprintf(line, sizeof(line), "Auto-Save/Auto-Load: < %s >", onoff_names[settings_autosave_autoload]);
-    int y4 = y3 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_AUTOSAVE_AUTOLOAD) {
-        render_text_pillbox(framebuffer, PADDING, y4, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-    } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y4, line, COLOR_TEXT);
-    }
-    /* Animations row */
-    snprintf(line, sizeof(line), "Animations: < %s >", onoff_names[settings_anim]);
-    int y5 = y4 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_ANIM) {
-        render_text_pillbox(framebuffer, PADDING, y5, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-    } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y5, line, COLOR_TEXT);
-    }
-    /* Hide empty folders row */
-    snprintf(line, sizeof(line), "Hide Empty Folders: < %s >", onoff_names[settings_hide_empty]);
-    int y6 = y5 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_HIDEEMPTY) {
-        render_text_pillbox(framebuffer, PADDING, y6, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-    } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y6, line, COLOR_TEXT);
-    }
-    /* Game switcher row */
-    snprintf(line, sizeof(line), "Game Switcher: < %s >", onoff_names[settings_game_switcher]);
-    int y7 = y6 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_SWITCHER) {
-        render_text_pillbox(framebuffer, PADDING, y7, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-    } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y7, line, COLOR_TEXT);
-    }
-    /* Load to recents row */
-    snprintf(line, sizeof(line), "Start in Recents: < %s >", onoff_names[settings_load_recents]);
-    int y8 = y7 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_LOADRECENTS) {
-        render_text_pillbox(framebuffer, PADDING, y8, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-    } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y8, line, COLOR_TEXT);
-    }
-    /* Button Mapping row */
-    int y9 = y8 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_REMAP) {
-        render_text_pillbox(framebuffer, PADDING, y9, "Button Mapping", COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-    } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y9, "Button Mapping", COLOR_TEXT);
-    }
-    /* Volume row (global output gain for all emulators) */
-    snprintf(line, sizeof(line), "Volume: < %d%% >", settings_volume);
-    int y10 = y9 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_VOLUME) {
-        render_text_pillbox(framebuffer, PADDING, y10, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-    } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y10, line, COLOR_TEXT);
-    }
-    /* Disable Sleep row (applies after restart — zhijack live-patches cubevol) */
-    snprintf(line, sizeof(line), "Disable Sleep (restart): < %s >", onoff_names[settings_disable_sleep]);
-    int y11 = y10 + ITEM_HEIGHT;
-    if (settings_menu_idx == SETTINGS_ROW_NOSLEEP) {
-        render_text_pillbox(framebuffer, PADDING, y11, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-    } else {
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y11, line, COLOR_TEXT);
+    /* Scroll window so the selected row stays on screen (the list is longer than
+     * the panel once headers are added). */
+    static int soff = 0;
+    if (settings_menu_idx < soff) soff = settings_menu_idx;
+    if (settings_menu_idx >= soff + VISIBLE_ENTRIES) soff = settings_menu_idx - VISIBLE_ENTRIES + 1;
+    if (soff > SETTINGS_ROW_N - VISIBLE_ENTRIES) soff = SETTINGS_ROW_N - VISIBLE_ENTRIES;
+    if (soff < 0) soff = 0;
+
+    int vis = SETTINGS_ROW_N - soff;
+    if (vis > VISIBLE_ENTRIES) vis = VISIBLE_ENTRIES;
+    for (int i = 0; i < vis; i++) {
+        int idx = soff + i;
+        const SRow *r = &settings_rows[idx];
+        int y = START_Y + i * ITEM_HEIGHT;
+        if (r->type == RT_HEADER) {
+            /* Category divider: TreeFrogUI ">> " marker, accent color, no pillbox,
+             * not selectable. */
+            snprintf(line, sizeof line, ">> %s", r->label);
+            font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, line, COLOR_SELECT_BG);
+            continue;
+        }
+        switch (r->type) {
+        case RT_THEME:  snprintf(line, sizeof line, "%s: < %s >", r->label, themes[settings_theme_idx].name); break;
+        case RT_FONT:   snprintf(line, sizeof line, "%s: < %s >", r->label, font_count > 0 ? font_disp[settings_font_idx] : "(none)"); break;
+        case RT_TOGGLE: snprintf(line, sizeof line, "%s: < %s >", r->label, onoff_names[*r->val]); break;
+        case RT_RANGE:  snprintf(line, sizeof line, "%s: < %d%% >", r->label, *r->val); break;
+        default:        snprintf(line, sizeof line, "%s", r->label); break;   /* RT_ACTION */
+        }
+        /* Options sit indented under their ">> HEADER" so the grouping reads
+         * clearly. Headers stay flush at PADDING. */
+        int ix = PADDING + UI_S(16);
+        if (settings_menu_idx == idx)
+            render_text_pillbox(framebuffer, ix, y, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+        else
+            font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, ix, y, line, COLOR_TEXT);
     }
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
@@ -1848,6 +1960,7 @@ void retro_run(void) {
     static bool banner_last_recents = false;
     static bool banner_last_favourites = false;
     static int  banner_last_sel = -1;
+    static int  banner_last_bg = -1;    /* reload when the backgrounds toggle flips */
     {
         const char *banner_path = current_path;
         char sel_path[MAX_PATH_LEN];
@@ -1866,11 +1979,13 @@ void retro_run(void) {
         if (viewing_recents != banner_last_recents ||
             viewing_favourites != banner_last_favourites ||
             strcmp(banner_path, banner_last_path) != 0 ||
-            selected_index != banner_last_sel) {
+            selected_index != banner_last_sel ||
+            settings_backgrounds != banner_last_bg) {
             load_banner_for_view(banner_path, viewing_recents, viewing_favourites);
             banner_last_recents = viewing_recents;
             banner_last_favourites = viewing_favourites;
             banner_last_sel = selected_index;
+            banner_last_bg = settings_backgrounds;
             strncpy(banner_last_path, banner_path, MAX_PATH_LEN - 1);
             banner_last_path[MAX_PATH_LEN - 1] = '\0';
         }
@@ -1911,7 +2026,17 @@ void retro_run(void) {
             int visible = min(entry_count - scroll_offset, VISIBLE_ENTRIES);
             for (int i = 0; i < visible; i++) {
                 int idx = scroll_offset + i;
-                render_menu_item(framebuffer, idx, entries[idx].name, entries[idx].is_dir,
+                const char *shown = entries[idx].name;
+                char disp[256];
+                /* Hide file extension (.gb/.gba/...) when enabled — display only,
+                 * the real name in entries[] is still used to launch. Files only. */
+                if (settings_hide_extensions && !entries[idx].is_dir) {
+                    strncpy(disp, entries[idx].name, sizeof disp - 1);
+                    disp[sizeof disp - 1] = '\0';
+                    char *dot = strrchr(disp, '.');
+                    if (dot && dot != disp) { *dot = '\0'; shown = disp; }
+                }
+                render_menu_item(framebuffer, idx, shown, entries[idx].is_dir,
                                  (idx == selected_index), scroll_offset, 0);
             }
         }
