@@ -15,6 +15,10 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <linux/fb.h>
 #include <dirent.h>
 #include <ctype.h>
 #include <math.h>
@@ -372,6 +376,71 @@ static void dbg(const char *msg) {
     FILE *f = fopen("/tmp/frogui_crash.log", "a");
     if (f) { fputs(msg, f); fputs("\n", f); fclose(f); }
     fprintf(stderr, "FROGUI_DBG: %s\n", msg);
+}
+
+/* Hide cubevol's own battery glyph (top-right of the /dev/fb1 overlay) while
+ * leaving its volume popup (drawn elsewhere) intact: zero just that corner rect.
+ * cubevol has no signal handler, so clearing once per frame keeps it hidden. */
+static void fb1_clear_battery_zone(void) {
+    int fd = open("/dev/fb1", O_RDWR);
+    if (fd < 0) return;
+    struct fb_var_screeninfo vi;
+    struct fb_fix_screeninfo fi;
+    if (ioctl(fd, FBIOGET_VSCREENINFO, &vi) == 0 &&
+        ioctl(fd, FBIOGET_FSCREENINFO, &fi) == 0 && fi.smem_len > 0) {
+        void *mem = mmap(NULL, fi.smem_len, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+        if (mem != MAP_FAILED) {
+            int bpp = vi.bits_per_pixel / 8; if (bpp < 1) bpp = 4;
+            int pitch = fi.line_length ? (int)fi.line_length : (int)vi.xres * bpp;
+            /* top-right ~1/4 width x top 12% height = the stock battery corner */
+            int zx = vi.xres * 3 / 4, zw = vi.xres - zx;
+            int zh = vi.yres / 8; if (zh < 24) zh = 24;
+            for (int y = 0; y < zh && y < (int)vi.yres; y++)
+                memset((char*)mem + (size_t)y*pitch + (size_t)zx*bpp, 0, (size_t)zw*bpp);
+            munmap(mem, fi.smem_len);
+        }
+    }
+    close(fd);
+}
+
+/* Cached battery % for the header (re-read every ~2s; ADC changes slowly). Also
+ * clears cubevol's battery corner each call so its glyph stays hidden. Called by
+ * render_header (every screen, every frame). */
+static int raw_to_pct(int raw) {
+    static const int rx[] = { 64, 153, 224, 255 };
+    static const int py[] = {  0,  50,  80, 100 };
+    if (raw <= rx[0]) return 0;
+    for (int i = 1; i < 4; i++) if (raw <= rx[i]) {
+        int sp = rx[i]-rx[i-1]; return py[i-1] + (py[i]-py[i-1])*(raw-rx[i-1])/(sp?sp:1); }
+    return 100;
+}
+/* Persistent ADC fds, opened O_RDWR ONCE like cubevol (battery_adc_init) - these
+ * nodes are flaky when re-opened per poll, especially check_adc2. slot 0=adc1
+ * (battery), 1=adc2 (charge). Read 1 byte from the kept-open fd each poll. */
+static int read_adc(int slot) {
+    static int fd[2] = { -2, -2 };
+    static const char *node[2] = { "/dev/check_adc1", "/dev/check_adc5" };
+    if (slot < 0 || slot > 1) return -1;
+    if (fd[slot] == -2) fd[slot] = open(node[slot], O_RDWR);
+    if (fd[slot] < 0) return -1;
+    unsigned char b = 0;
+    lseek(fd[slot], 0, SEEK_SET);
+    int n = read(fd[slot], &b, 1);
+    return (n == 1) ? b : -1;
+}
+
+static int g_batt_charging = 0;
+int frogui_battery_charging(void) { return g_batt_charging; }
+int frogui_battery_pct(void) {
+    static int cached = -1, tick = 0;
+    if ((tick++ % 120) == 0 || cached < 0) {
+        int a1 = read_adc(0);   /* battery = check_adc1 */
+        int a5 = read_adc(1);   /* charge detect = check_adc5 (~0 idle, ~140 charging) */
+        cached = (a1 >= 0) ? raw_to_pct(a1) : -1;
+        g_batt_charging = (a5 >= 64) ? 1 : 0;
+    }
+    fb1_clear_battery_zone();
+    return cached;
 }
 
 /* --- Input (via input.c / cubevol shmem) --- */

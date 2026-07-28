@@ -127,11 +127,59 @@ void render_text_pillbox(uint16_t *framebuffer, int x, int y, const char *text,
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, x, y, text, text_color);
 }
 
+void render_battery(uint16_t *framebuffer, int pct) {
+    if (!framebuffer || pct < 0) return;
+    if (pct > 100) pct = 100;
+    extern int frogui_battery_charging(void);
+    int charging = frogui_battery_charging();
+
+    /* NextUI-style: rounded body + a little terminal nub, fill proportional. */
+    int bw = UI_S(26), bh = UI_S(13);        /* body */
+    int nub_w = UI_S(3), nub_h = bh / 2;
+    int pad = UI_S(2);
+    int x = SCREEN_WIDTH - PADDING - bw - nub_w;
+    int y = 10;                               /* header baseline area */
+
+    uint16_t outline = COLOR_HEADER;
+    uint16_t green   = 0x2FE6;                /* charging fill */
+    uint16_t fillcol = charging ? green : ((pct <= 15) ? 0xF800 /*red*/ : COLOR_HEADER);
+
+    /* body outline (rounded), hollow */
+    int r = UI_S(3);
+    render_rounded_rect(framebuffer, x, y, bw, bh, r, outline);
+    render_rounded_rect(framebuffer, x + 1, y + 1, bw - 2, bh - 2, r - 1, COLOR_BG);
+    /* terminal nub */
+    render_fill_rect(framebuffer, x + bw, y + (bh - nub_h) / 2, nub_w, nub_h, outline);
+    /* fill proportional to pct */
+    int inner_w = bw - 2 * pad;
+    int fw = inner_w * pct / 100; if (fw < 0) fw = 0; if (fw > inner_w) fw = inner_w;
+    if (fw > 0)
+        render_fill_rect(framebuffer, x + pad, y + pad, fw, bh - 2 * pad, fillcol);
+
+    /* Charging bolt: a small lightning glyph centered on the body. */
+    if (charging) {
+        int cx = x + bw / 2, cy = y + bh / 2;
+        uint16_t bolt = 0xFFFF;
+        int s = UI_S(1); if (s < 1) s = 1;
+        /* two offset triangles forming a zig-zag bolt (cheap raster) */
+        for (int i = -bh/2 + pad; i < bh/2 - pad; i++) {
+            int w = (i < 0) ? (bh/2 + i) : (bh/2 - i);   /* taper */
+            int off = (i < 0) ? -s : s;
+            for (int j = -s; j <= s; j++)
+                render_fill_rect(framebuffer, cx + off + j, cy + i, 1, 1, bolt);
+            (void)w;
+        }
+    }
+}
+
 void render_header(uint16_t *framebuffer, const char *title) {
     if (!framebuffer || !title) return;
-    
+
     // Draw folder/section name in header area
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, 10, title, COLOR_HEADER);
+
+    // Battery indicator, top-right (our own; cubevol's is hidden)
+    { extern int frogui_battery_pct(void); render_battery(framebuffer, frogui_battery_pct()); }
 }
 
 void render_legend(uint16_t *framebuffer, int x_button_mode, int show_select, int show_search) {

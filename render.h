@@ -67,6 +67,9 @@ void render_fill_rect(uint16_t *framebuffer, int x, int y, int width, int height
 
 // Draw a rounded rectangle (pill shape)
 void render_rounded_rect(uint16_t *framebuffer, int x, int y, int width, int height, int radius, uint16_t color);
+/* NextUI-style battery pill: rounded body + nub + proportional fill. pct 0..100;
+ * top-right of the header. Draws nothing if pct < 0. */
+void render_battery(uint16_t *framebuffer, int pct);
 
 // Draw a text pillbox with proper padding (unified method)
 void render_text_pillbox(uint16_t *framebuffer, int x, int y, const char *text,
