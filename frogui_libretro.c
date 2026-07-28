@@ -406,6 +406,49 @@ static void font_add(const char *fname) {
     font_count++;
 }
 
+/* ---- Wallpaper: one image used across ALL views (index 0 = "None" = the normal
+ * per-system background art). Scanned from frogui/wallpapers/. ------------- */
+#define MAX_WALL 64
+static char wallpaper_files[MAX_WALL][FONT_STR_MAX];
+static char wallpaper_disp[MAX_WALL][FONT_STR_MAX];
+static int  wallpaper_count = 0;         /* includes slot 0 = "None" */
+static int  settings_wallpaper_idx = 0;  /* 0 = none/per-system */
+static int  settings_wallpaper_fit = 0;  /* BANNER_FIT_* (Fill/Fit/Stretch/Center/Tile) */
+static const char *wallpaper_fit_names[] = { "Fill", "Fit", "Stretch", "Center", "Tile" };
+#define WALL_FIT_N 5
+
+static int wall_has_ext(const char *n) {
+    const char *d = strrchr(n, '.');
+    return d && (strcasecmp(d, ".png") == 0 || strcasecmp(d, ".jpg") == 0 ||
+                 strcasecmp(d, ".jpeg") == 0 || strcasecmp(d, ".bmp") == 0);
+}
+static void wallpaper_scan(void) {
+    wallpaper_count = 0;
+    strcpy(wallpaper_files[0], "");        /* slot 0 = None */
+    strcpy(wallpaper_disp[0], "None");
+    wallpaper_count = 1;
+    DIR *dp = opendir("/mnt/sdcard/frogui/wallpapers");
+    if (dp) {
+        struct dirent *e;
+        while ((e = readdir(dp)) && wallpaper_count < MAX_WALL) {
+            if (e->d_name[0] == '.' || !wall_has_ext(e->d_name)) continue;
+            int dup = 0;
+            for (int i = 1; i < wallpaper_count; i++)
+                if (strcasecmp(wallpaper_files[i], e->d_name) == 0) { dup = 1; break; }
+            if (dup) continue;
+            strncpy(wallpaper_files[wallpaper_count], e->d_name, FONT_STR_MAX - 1);
+            wallpaper_files[wallpaper_count][FONT_STR_MAX - 1] = '\0';
+            strncpy(wallpaper_disp[wallpaper_count], e->d_name, FONT_STR_MAX - 1);
+            wallpaper_disp[wallpaper_count][FONT_STR_MAX - 1] = '\0';
+            char *dot = strrchr(wallpaper_disp[wallpaper_count], '.');
+            if (dot) *dot = '\0';
+            wallpaper_count++;
+        }
+        closedir(dp);
+    }
+    if (settings_wallpaper_idx >= wallpaper_count) settings_wallpaper_idx = 0;
+}
+
 static void font_scan(void) {
     static const char *dirs[] = {
         "/mnt/sdcard/cubegm/fonts",
@@ -483,7 +526,7 @@ static const char *onoff_names[] = {"off", "on"};
  * options. Adding, reordering, or grouping = just editing this table; the nav,
  * adjust, and render code all iterate it. TOGGLE/RANGE point at their int; THEME
  * and FONT are special (dynamic option lists); ACTION opens the remap wizard. */
-typedef enum { RT_HEADER, RT_TOGGLE, RT_RANGE, RT_THEME, RT_FONT, RT_ACTION } SRowType;
+typedef enum { RT_HEADER, RT_TOGGLE, RT_RANGE, RT_THEME, RT_FONT, RT_WALLPAPER, RT_WALLFIT, RT_ACTION } SRowType;
 typedef struct {
     SRowType type;
     const char *label;
@@ -498,6 +541,8 @@ static const SRow settings_rows[] = {
     { RT_RANGE,  "Brightness", &settings_brightness, 0, 100, SETTINGS_BRIGHTNESS_STEP },
     { RT_TOGGLE, "Animations", &settings_anim },
     { RT_TOGGLE, "Background Images", &settings_backgrounds },
+    { RT_WALLPAPER, "Wallpaper" },
+    { RT_WALLFIT, "Wallpaper Fit" },
     { RT_TOGGLE, "Hide Extensions", &settings_hide_extensions },
     { RT_TOGGLE, "Hide Empty Folders", &settings_hide_empty },
     { RT_HEADER, "LIBRARY" },
@@ -570,6 +615,13 @@ static void settings_load_file(void) {
             for (int i = 0; i < font_count; i++)
                 if (strcasecmp(font_files[i], val) == 0 ||
                     strcasecmp(font_disp[i], val) == 0) { settings_font_idx = i; break; }
+        } else if (strcmp(line, "wallpaper") == 0) {
+            settings_wallpaper_idx = 0;   /* default None */
+            for (int i = 1; i < wallpaper_count; i++)
+                if (strcasecmp(wallpaper_files[i], val) == 0) { settings_wallpaper_idx = i; break; }
+        } else if (strcmp(line, "wallpaper_fit") == 0) {
+            for (int i = 0; i < WALL_FIT_N; i++)
+                if (strcasecmp(wallpaper_fit_names[i], val) == 0) { settings_wallpaper_fit = i; break; }
         } else if (strcmp(line, "brightness") == 0) {
             settings_brightness = atoi(val);
         } else if (strcmp(line, "volume") == 0) {
@@ -609,6 +661,10 @@ static void settings_save_file(void) {
     if (!f) { dbg("settings save: fopen failed"); return; }
     fprintf(f, "theme=%s\n", themes[settings_theme_idx].name);
     fprintf(f, "font=%s\n", font_count > 0 ? font_files[settings_font_idx] : "");
+    fprintf(f, "wallpaper=%s\n",
+            (settings_wallpaper_idx > 0 && settings_wallpaper_idx < wallpaper_count)
+            ? wallpaper_files[settings_wallpaper_idx] : "none");
+    fprintf(f, "wallpaper_fit=%s\n", wallpaper_fit_names[settings_wallpaper_fit]);
     fprintf(f, "brightness=%d\n", settings_brightness);
     fprintf(f, "volume=%d\n", settings_volume);
     fprintf(f, "filter=%s\n", filter_names[settings_filter_idx]);
@@ -663,6 +719,14 @@ static const char* get_console_folder(const char *path) {
 
 static void load_banner_for_view(const char *path, bool is_recents, bool is_favourites) {
     if (!settings_backgrounds) { banner_clear(); return; }   /* solid theme bg */
+    /* Single wallpaper (if picked): same image in every view, overrides the
+     * per-system art. */
+    if (settings_wallpaper_idx > 0 && settings_wallpaper_idx < wallpaper_count) {
+        char wp[512];
+        snprintf(wp, sizeof wp, "/mnt/sdcard/frogui/wallpapers/%s",
+                 wallpaper_files[settings_wallpaper_idx]);
+        if (access(wp, R_OK) == 0) { banner_load_fit(wp, settings_wallpaper_fit, COLOR_BG); return; }
+    }
     char img[512];
     const char *exts[] = { "png", "jpg", "jpeg", "bmp", NULL };
     if (is_recents) {
@@ -1451,6 +1515,13 @@ static void handle_settings_menu(void) {
             if (font_count > 0)
                 settings_font_idx = (settings_font_idx + delta + font_count) % font_count;
             break;
+        case RT_WALLPAPER:
+            if (wallpaper_count > 0)
+                settings_wallpaper_idx = (settings_wallpaper_idx + delta + wallpaper_count) % wallpaper_count;
+            break;
+        case RT_WALLFIT:
+            settings_wallpaper_fit = (settings_wallpaper_fit + delta + WALL_FIT_N) % WALL_FIT_N;
+            break;
         case RT_TOGGLE:
             *r->val = (*r->val + delta + 2) % 2;
             break;
@@ -1751,6 +1822,8 @@ void retro_init(void) {
     dbg("font_init done");
     font_scan();
     dbg("font_scan done");
+    wallpaper_scan();
+    dbg("wallpaper_scan done");
     theme_init();
     dbg("theme_init done");
     settings_load_file();
@@ -1840,6 +1913,8 @@ static void render_settings_menu(void) {
         switch (r->type) {
         case RT_THEME:  snprintf(line, sizeof line, "%s: < %s >", r->label, themes[settings_theme_idx].name); break;
         case RT_FONT:   snprintf(line, sizeof line, "%s: < %s >", r->label, font_count > 0 ? font_disp[settings_font_idx] : "(none)"); break;
+        case RT_WALLPAPER: snprintf(line, sizeof line, "%s: < %s >", r->label, wallpaper_disp[settings_wallpaper_idx]); break;
+        case RT_WALLFIT:   snprintf(line, sizeof line, "%s: < %s >", r->label, wallpaper_fit_names[settings_wallpaper_fit]); break;
         case RT_TOGGLE: snprintf(line, sizeof line, "%s: < %s >", r->label, onoff_names[*r->val]); break;
         case RT_RANGE:  snprintf(line, sizeof line, "%s: < %d%% >", r->label, *r->val); break;
         default:        snprintf(line, sizeof line, "%s", r->label); break;   /* RT_ACTION */
@@ -1961,6 +2036,8 @@ void retro_run(void) {
     static bool banner_last_favourites = false;
     static int  banner_last_sel = -1;
     static int  banner_last_bg = -1;    /* reload when the backgrounds toggle flips */
+    static int  banner_last_wp = -1;    /* reload when the wallpaper choice changes */
+    static int  banner_last_wpfit = -1; /* reload when the wallpaper fit mode changes */
     {
         const char *banner_path = current_path;
         char sel_path[MAX_PATH_LEN];
@@ -1980,12 +2057,16 @@ void retro_run(void) {
             viewing_favourites != banner_last_favourites ||
             strcmp(banner_path, banner_last_path) != 0 ||
             selected_index != banner_last_sel ||
-            settings_backgrounds != banner_last_bg) {
+            settings_backgrounds != banner_last_bg ||
+            settings_wallpaper_idx != banner_last_wp ||
+            settings_wallpaper_fit != banner_last_wpfit) {
             load_banner_for_view(banner_path, viewing_recents, viewing_favourites);
             banner_last_recents = viewing_recents;
             banner_last_favourites = viewing_favourites;
             banner_last_sel = selected_index;
             banner_last_bg = settings_backgrounds;
+            banner_last_wp = settings_wallpaper_idx;
+            banner_last_wpfit = settings_wallpaper_fit;
             strncpy(banner_last_path, banner_path, MAX_PATH_LEN - 1);
             banner_last_path[MAX_PATH_LEN - 1] = '\0';
         }

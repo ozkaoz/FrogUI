@@ -14,7 +14,7 @@ static int font_loaded = 0;
 #ifndef UI_SCALE
 #define UI_SCALE 100
 #endif
-#define FONT_SIZE (20.0f * UI_SCALE / 100.0f)
+#define FONT_SIZE (26.0f * UI_SCALE / 100.0f)   /* NextUI-style larger text */
 
 // Internal function to load a font file
 static int load_font_file(const char *font_filename) {
@@ -84,8 +84,10 @@ void font_load_from_settings(const char *font_name) {
     // Map font names to font files — always render at FONT_SIZE (scaled by UI_SCALE)
     if (strcmp(font_name, "Monogram") == 0) {
         font_filename = "monogram.ttf";
-    } else {
+    } else if (strcmp(font_name, "GamePocket") == 0) {
         font_filename = "GamePocket-Regular-ZeroKern.ttf";
+    } else {
+        font_filename = "BPreplayBold.otf";   /* NextUI-style default */
     }
     custom_size = FONT_SIZE;  // use compile-time size, not hardcoded per-font px
 
@@ -97,8 +99,11 @@ void font_load_from_settings(const char *font_name) {
 }
 
 void font_init(void) {
-    // Load default font initially
-    font_load_from_settings("GamePocket");
+    // Default to the NextUI-style bold font; fall back if the file is missing.
+    if (load_font_file("BPreplayBold.otf"))
+        font_scale = stbtt_ScaleForPixelHeight(&font_info, FONT_SIZE);
+    else
+        font_load_from_settings("GamePocket");
 }
 
 /* Rasterize glyphs into a static buffer instead of stbtt_GetGlyphBitmap (which

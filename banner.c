@@ -33,10 +33,11 @@ void banner_set_anim(int enabled) {
     if (!banner_anim) fade_frame = FADE_FRAMES;
 }
 
-void banner_load(const char *path) {
+static void banner_load_common(const char *path, int mode, uint16_t bg) {
     int w, h, ch;
     unsigned char *img = stbi_load(path, &w, &h, &ch, 3);
-    if (!img) {
+    if (!img || w <= 0 || h <= 0) {
+        if (img) stbi_image_free(img);
         banner_loaded = 0;
         return;
     }
@@ -64,10 +65,39 @@ void banner_load(const char *path) {
         fade_frame = FADE_FRAMES;
     }
 
+    /* Placement: dst rect [dx0,dx0+dw) x [dy0,dy0+dh) that the (scaled) image
+     * covers; pixels outside it get bg. For FILL the rect exceeds the screen
+     * (crop); for FIT/CENTER it's inset (letterbox). */
+    int dx0 = 0, dy0 = 0, dw = sw, dh = sh;
+    if (mode == BANNER_FIT_FILL) {
+        /* cover: scale by the larger ratio, center, crop */
+        if ((long)w * sh > (long)h * sw) { dh = sh; dw = (int)((long)w * sh / h); }
+        else                             { dw = sw; dh = (int)((long)h * sw / w); }
+        dx0 = (sw - dw) / 2; dy0 = (sh - dh) / 2;
+    } else if (mode == BANNER_FIT_FIT) {
+        /* contain: scale by the smaller ratio, center, letterbox */
+        if ((long)w * sh > (long)h * sw) { dw = sw; dh = (int)((long)h * sw / w); }
+        else                             { dh = sh; dw = (int)((long)w * sh / h); }
+        dx0 = (sw - dw) / 2; dy0 = (sh - dh) / 2;
+    } else if (mode == BANNER_FIT_CENTER) {
+        dw = w; dh = h; dx0 = (sw - w) / 2; dy0 = (sh - h) / 2;
+    }
+    /* STRETCH: dst == screen. TILE handled inline below. */
+
     for (int y = 0; y < sh; y++) {
-        int sy = (y * h) / sh;
         for (int x = 0; x < sw; x++) {
-            int sx = (x * w) / sw;
+            int sx, sy;
+            if (mode == BANNER_FIT_TILE) {
+                sx = x % w; sy = y % h;
+            } else if (x < dx0 || x >= dx0 + dw || y < dy0 || y >= dy0 + dh) {
+                banner_buf[y * sw + x] = bg;      /* outside image (letterbox/center) */
+                continue;
+            } else {
+                sx = (int)((long)(x - dx0) * w / dw);
+                sy = (int)((long)(y - dy0) * h / dh);
+                if (sx < 0) sx = 0; if (sx >= w) sx = w - 1;
+                if (sy < 0) sy = 0; if (sy >= h) sy = h - 1;
+            }
             unsigned char *p = img + (sy * w + sx) * 3;
             banner_buf[y * sw + x] = rgb_to_565(p[0], p[1], p[2]);
         }
@@ -75,6 +105,13 @@ void banner_load(const char *path) {
 
     stbi_image_free(img);
     banner_loaded = 1;
+}
+
+void banner_load(const char *path) {
+    banner_load_common(path, BANNER_FIT_STRETCH, 0);   /* system art: stretch, as before */
+}
+void banner_load_fit(const char *path, int mode, uint16_t bg) {
+    banner_load_common(path, mode, bg);
 }
 
 void banner_clear(void) {

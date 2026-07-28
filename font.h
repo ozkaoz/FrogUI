@@ -32,8 +32,8 @@ void font_cap_metrics(int *baseline_out, int *cap_height_out);
 #ifndef UI_SCALE
 #define UI_SCALE 100
 #endif
-#define FONT_CHAR_WIDTH    (18 * UI_SCALE / 100)
-#define FONT_CHAR_HEIGHT   (20 * UI_SCALE / 100)
+#define FONT_CHAR_WIDTH    (23 * UI_SCALE / 100)
+#define FONT_CHAR_HEIGHT   (26 * UI_SCALE / 100)
 #define FONT_CHAR_SPACING  (13 * UI_SCALE / 100)
 
 #endif // FONT_H

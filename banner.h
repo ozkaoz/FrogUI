@@ -1,7 +1,10 @@
 #pragma once
 #include <stdint.h>
 
-void banner_load(const char *path);
+/* Windows-style wallpaper fit modes. */
+enum { BANNER_FIT_FILL, BANNER_FIT_FIT, BANNER_FIT_STRETCH, BANNER_FIT_CENTER, BANNER_FIT_TILE };
+void banner_load(const char *path);                 /* stretch (system art) */
+void banner_load_fit(const char *path, int mode, uint16_t bg);  /* wallpaper */
 void banner_clear(void);
 void banner_render(uint16_t *framebuffer);
 int  banner_is_loaded(void);

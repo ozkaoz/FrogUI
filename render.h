@@ -39,7 +39,7 @@ void render_set_geometry(int w, int h, int ui_scale);
 
 // Layout — all derived from UI_SCALE
 #define HEADER_HEIGHT UI_S(30)
-#define ITEM_HEIGHT   UI_S(24)
+#define ITEM_HEIGHT   UI_S(32)   /* taller rows for the larger NextUI-style font */
 #define PADDING       UI_S(16)
 #define START_Y       UI_S(40)
 #define VISIBLE_ENTRIES ((SCREEN_HEIGHT - START_Y - ITEM_HEIGHT) / ITEM_HEIGHT)
