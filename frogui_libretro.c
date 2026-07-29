@@ -431,6 +431,7 @@ static int read_adc(int slot) {
 
 static int g_batt_charging = 0;
 int frogui_battery_charging(void) { return g_batt_charging; }
+int frogui_battery_color_mode(void);   /* defined after settings_battery_color */
 int frogui_battery_pct(void) {
     static int cached = -1, tick = 0;
     if ((tick++ % 120) == 0 || cached < 0) {
@@ -581,6 +582,8 @@ static int settings_hide_empty = 1;     /* hide rom folders with no games: 0=off
 static int settings_hide_extensions = 1; /* hide file extensions in the browser: 0=off, 1=on */
 static int settings_backgrounds = 1;     /* show per-system background images: 0=off (solid theme bg), 1=on */
 static int settings_folder_cache = 1;    /* cache folder listings (mtime-keyed) for fast nav: 0=off, 1=on */
+static int settings_battery_color = 0;   /* "Nel Battery Mode": solid color light by level instead of fill bar */
+int frogui_battery_color_mode(void) { return settings_battery_color; }
 static int settings_game_switcher = 1;  /* recents as box-art carousel: 0=off, 1=on */
 static int settings_load_recents = 0;   /* start FrogUI in the recents view: 0=off, 1=on */
 static int settings_disable_sleep = 1;  /* live-patch cubevol to disable power sleep: 0=off, 1=on. zhijack reads this at boot; applies after restart. Default ON: R36SX/SF3500-class sleep isn't supported by TreeFrogUI, so ship with it disabled and point users at Quick Resume instead. */
@@ -609,6 +612,7 @@ static const SRow settings_rows[] = {
     { RT_FONT,   "Font" },
     { RT_RANGE,  "Brightness", &settings_brightness, 0, 100, SETTINGS_BRIGHTNESS_STEP },
     { RT_TOGGLE, "Animations", &settings_anim },
+    { RT_TOGGLE, "Battery Colour Mode", &settings_battery_color },
     { RT_TOGGLE, "Background Images", &settings_backgrounds },
     { RT_WALLPAPER, "Wallpaper" },
     { RT_WALLFIT, "Wallpaper Fit" },
@@ -712,6 +716,8 @@ static void settings_load_file(void) {
             settings_backgrounds = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "folder_cache") == 0) {
             settings_folder_cache = (strcmp(val, "on") == 0) ? 1 : 0;
+        } else if (strcmp(line, "battery_color") == 0) {
+            settings_battery_color = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "disable_sleep") == 0) {
             settings_disable_sleep = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "game_switcher") == 0) {
@@ -744,6 +750,7 @@ static void settings_save_file(void) {
     fprintf(f, "hide_extensions=%s\n", onoff_names[settings_hide_extensions]);
     fprintf(f, "backgrounds=%s\n", onoff_names[settings_backgrounds]);
     fprintf(f, "folder_cache=%s\n", onoff_names[settings_folder_cache]);
+    fprintf(f, "battery_color=%s\n", onoff_names[settings_battery_color]);
     fprintf(f, "game_switcher=%s\n", onoff_names[settings_game_switcher]);
     fprintf(f, "load_recents=%s\n", onoff_names[settings_load_recents]);
     fprintf(f, "disable_sleep=%s\n", onoff_names[settings_disable_sleep]);
