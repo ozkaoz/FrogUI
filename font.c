@@ -111,6 +111,17 @@ void font_init(void) {
  * transiently fail -> draw bails -> glyphs vanish for a frame. Ported from the
  * same fix in picoarch/menu_font.c. No per-frame allocation now. */
 #define GLYPH_MAX 128
+/* Per-glyph cache: rasterize each character ONCE at the current font scale and
+ * reuse it. The old code ran stbtt_MakeGlyphBitmap + GetFontVMetrics for every
+ * character every frame, which made scrolling crawl with the larger font. */
+struct gcache_ent { int valid, w, h, xoff, yoff; unsigned char *bmp; };
+static struct gcache_ent gcache[128];
+static float gcache_scale = -1.0f;
+static int   gcache_baseline = 0;
+static void gcache_reset(void) {
+    for (int i = 0; i < 128; i++) { free(gcache[i].bmp); gcache[i].bmp = NULL; gcache[i].valid = 0; }
+}
+
 void font_draw_char(uint16_t *framebuffer, int screen_width, int screen_height,
                    int x, int y, char c, uint16_t color) {
     if (!font_loaded || !framebuffer) return;
@@ -119,26 +130,40 @@ void font_draw_char(uint16_t *framebuffer, int screen_width, int screen_height,
     if (c >= 'a' && c <= 'z') {
         c = c - 'a' + 'A';
     }
+    unsigned char idx = (unsigned char)c;
+    if (idx >= 128) return;
 
-    // Get glyph index
-    int glyph_index = stbtt_FindGlyphIndex(&font_info, c);
-    if (glyph_index == 0) return; // Glyph not found
+    // Rebuild cache if the font/scale changed
+    if (gcache_scale != font_scale) {
+        gcache_reset();
+        gcache_scale = font_scale;
+        int ascent, descent, line_gap;
+        stbtt_GetFontVMetrics(&font_info, &ascent, &descent, &line_gap);
+        gcache_baseline = (int)(ascent * font_scale);
+    }
 
-    // Get glyph bounds and rasterize into a static scratch buffer
-    int xoff, yoff, x1, y1;
-    stbtt_GetGlyphBitmapBox(&font_info, glyph_index, font_scale, font_scale, &xoff, &yoff, &x1, &y1);
-    int width = x1 - xoff, height = y1 - yoff;
-    if (width <= 0 || height <= 0) return;              // space / empty glyph
-    if (width > GLYPH_MAX || height > GLYPH_MAX) return; // oversized: skip
+    struct gcache_ent *g = &gcache[idx];
+    if (!g->valid) {
+        int glyph_index = stbtt_FindGlyphIndex(&font_info, c);
+        if (glyph_index == 0) { g->valid = 1; g->w = g->h = 0; }   // no glyph: cache empty
+        else {
+            int xoff, yoff, x1, y1;
+            stbtt_GetGlyphBitmapBox(&font_info, glyph_index, font_scale, font_scale, &xoff, &yoff, &x1, &y1);
+            int width = x1 - xoff, height = y1 - yoff;
+            if (width <= 0 || height <= 0 || width > GLYPH_MAX || height > GLYPH_MAX) {
+                g->valid = 1; g->w = g->h = 0;
+            } else {
+                g->bmp = (unsigned char*)malloc((size_t)width * height);
+                if (!g->bmp) return;   // alloc fail: try again next frame
+                stbtt_MakeGlyphBitmap(&font_info, g->bmp, width, height, width, font_scale, font_scale, glyph_index);
+                g->w = width; g->h = height; g->xoff = xoff; g->yoff = yoff; g->valid = 1;
+            }
+        }
+    }
+    if (g->w <= 0 || g->h <= 0) return;   // space / empty
 
-    static unsigned char bitmap[GLYPH_MAX * GLYPH_MAX];
-    stbtt_MakeGlyphBitmap(&font_info, bitmap, width, height, width, font_scale, font_scale, glyph_index);
-
-    // Get vertical metrics for proper baseline alignment
-    int ascent, descent, line_gap;
-    stbtt_GetFontVMetrics(&font_info, &ascent, &descent, &line_gap);
-    int baseline = (int)(ascent * font_scale);
-
+    int width = g->w, height = g->h, xoff = g->xoff, yoff = g->yoff, baseline = gcache_baseline;
+    const unsigned char *bitmap = g->bmp;
     // Draw the glyph
     for (int row = 0; row < height; row++) {
         for (int col = 0; col < width; col++) {

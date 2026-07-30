@@ -97,8 +97,10 @@ static uint32_t ext_raw = 0;
 
 #define FACE_BITS 0xF000u
 #define FACE_HOLD 4   /* frames (~65ms @ 60fps) a face bit must be held to count */
-#define NAV_HOLD  3   /* dpad/shoulders/start/select: ~50ms — kills the two-writer
-                       * (rkgame+cubevol) flicker that ghosts the menu */
+#define NAV_HOLD  1   /* dpad/shoulders/start/select: register next frame (~16ms) so
+                       * the initial press is snappy. rkgame is killed on R36SX so
+                       * the old two-writer ghosting is gone; a 1-frame filter still
+                       * drops instantaneous glitches. Bump to 2 if ghosting returns. */
 
 void input_update(void) {
     /* Combine the raw joy_key shm with ext_raw (picoarch's ALREADY-debounced input
@@ -139,6 +141,31 @@ bool input_is_pressed(FrogButton btn) {
 
 bool input_was_pressed(FrogButton btn) {
     return ((current_state >> btn) & 1) && !((prev_state >> btn) & 1);
+}
+
+/* Auto-repeat for menu navigation: fires on the initial press, then (after a
+ * short delay) repeatedly while held. TIME-based (ms), so the repeat rate is the
+ * same regardless of frame rate - no more one-tap-per-item scrolling. */
+#include <sys/time.h>
+#define REPEAT_DELAY_MS 300   /* hold this long before repeating */
+#define REPEAT_RATE_MS  70    /* then one step every this many ms */
+static long input_now_ms(void) {
+    struct timeval t; gettimeofday(&t, NULL);
+    return (long)t.tv_sec * 1000 + t.tv_usec / 1000;
+}
+bool input_repeat(FrogButton btn) {
+    static long hold_start[32], last_rep[32];
+    int held = (current_state >> btn) & 1;
+    int was  = (prev_state    >> btn) & 1;
+    long t = input_now_ms();
+    if (held && !was) { hold_start[btn] = t; last_rep[btn] = t; return true; }  /* edge */
+    if (held && was &&
+        t - hold_start[btn] >= REPEAT_DELAY_MS &&
+        t - last_rep[btn]   >= REPEAT_RATE_MS) {
+        last_rep[btn] = t;
+        return true;
+    }
+    return false;
 }
 
 void input_set_ext_raw(uint32_t raw) { ext_raw = raw; }

@@ -383,24 +383,34 @@ static void dbg(const char *msg) {
  * overlay (see docs/osd-battery-volume.md), so we keep cubevol's. Zero just the
  * top-right corner each frame. */
 static void fb1_clear_battery_zone(void) {
-    int fd = open("/dev/fb1", O_RDWR);
-    if (fd < 0) return;
-    struct fb_var_screeninfo vi;
-    struct fb_fix_screeninfo fi;
-    if (ioctl(fd, FBIOGET_VSCREENINFO, &vi) == 0 &&
-        ioctl(fd, FBIOGET_FSCREENINFO, &fi) == 0 && fi.smem_len > 0) {
-        void *mem = mmap(NULL, fi.smem_len, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
-        if (mem != MAP_FAILED) {
-            int bpp = vi.bits_per_pixel / 8; if (bpp < 1) bpp = 4;
-            int pitch = fi.line_length ? (int)fi.line_length : (int)vi.xres * bpp;
-            int zx = vi.xres * 3 / 4, zw = vi.xres - zx;
-            int zh = vi.yres / 8; if (zh < 24) zh = 24;
-            for (int y = 0; y < zh && y < (int)vi.yres; y++)
-                memset((char*)mem + (size_t)y*pitch + (size_t)zx*bpp, 0, (size_t)zw*bpp);
-            munmap(mem, fi.smem_len);
+    /* Persistent mmap + cached geometry: open/mmap ONCE. The old per-frame
+     * open+ioctl+mmap+munmap+close stalled the loop (visible input lag).
+     * Do not latch a failed first attempt: early boot may reach FrogUI before
+     * fb1 is ready, so retry later until the one-time mmap succeeds. */
+    static void *mem = NULL; static int inited = 0;
+    static int pitch = 0, bpp = 4, zx = 0, zw = 0, zh = 0, ph = 0;
+    if (!inited) {
+        int fd = open("/dev/fb1", O_RDWR);
+        if (fd < 0) return;
+        struct fb_var_screeninfo vi; struct fb_fix_screeninfo fi;
+        if (ioctl(fd, FBIOGET_VSCREENINFO, &vi) == 0 &&
+            ioctl(fd, FBIOGET_FSCREENINFO, &fi) == 0 && fi.smem_len > 0) {
+            void *m = mmap(NULL, fi.smem_len, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+            if (m != MAP_FAILED) {
+                mem = m;
+                bpp = vi.bits_per_pixel / 8; if (bpp < 1) bpp = 4;
+                pitch = fi.line_length ? (int)fi.line_length : (int)vi.xres * bpp;
+                zx = vi.xres * 3 / 4; zw = vi.xres - zx;
+                zh = vi.yres / 8; if (zh < 24) zh = 24;
+                ph = vi.yres;
+                inited = 1;
+            }
         }
+        close(fd);   /* mmap survives close */
     }
-    close(fd);
+    if (!mem) return;
+    for (int y = 0; y < zh && y < ph; y++)
+        memset((char*)mem + (size_t)y*pitch + (size_t)zx*bpp, 0, (size_t)zw*bpp);
 }
 
 /* Cached battery % for the header (re-read every ~2s; ADC changes slowly). Also
@@ -434,7 +444,10 @@ int frogui_battery_charging(void) { return g_batt_charging; }
 int frogui_battery_color_mode(void);   /* defined after settings_battery_color */
 int frogui_battery_pct(void) {
     static int cached = -1, tick = 0;
-    if ((tick++ % 120) == 0 || cached < 0) {
+    /* Re-read every ~5s (300 frames @ 60fps); battery changes slowly. While still
+     * unread (cached < 0, e.g. the ADC node wasn't ready right at boot), retry
+     * every frame until it succeeds. */
+    if (cached < 0 || (tick++ % 300) == 0) {
         int a1 = read_adc(0);   /* battery = check_adc1 */
         int a5 = read_adc(1);   /* charge detect = check_adc5 (~0 idle, ~140 charging) */
         cached = (a1 >= 0) ? raw_to_pct(a1) : -1;
@@ -645,6 +658,15 @@ static void mkdir_p(const char *path) {
     system(cmd);
 }
 
+static void settings_write_volume(void) {
+    FILE *vf = fopen("/mnt/sdcard/cubegm/sndgain.txt", "w");
+    if (!vf) return;
+    fprintf(vf, "%d\n", settings_volume);
+    fflush(vf);
+    fsync(fileno(vf));
+    fclose(vf);
+}
+
 static void settings_apply(void) {
     extern const int theme_count;
     if (settings_theme_idx < 0 || settings_theme_idx >= theme_count) settings_theme_idx = 0;
@@ -664,8 +686,32 @@ static void settings_apply(void) {
      * scales its own audio. FrogUI is the single place to set it. */
     if (settings_volume < 0)   settings_volume = 0;
     if (settings_volume > 100) settings_volume = 100;
-    { FILE *vf = fopen("/mnt/sdcard/cubegm/sndgain.txt", "w");
-      if (vf) { fprintf(vf, "%d\n", settings_volume); fflush(vf); fsync(fileno(vf)); fclose(vf); } }
+    settings_write_volume();
+}
+
+/* Apply only the setting being previewed. The old generic settings_apply()
+ * reloaded the current font and fsync'd sndgain.txt after every Left/Right press,
+ * even for unrelated toggles. Persistent brightness/volume writes are deferred
+ * until menu exit; their on-screen preview remains immediate. */
+static void settings_preview_row(const SRow *r) {
+    if (!r) return;
+    switch (r->type) {
+    case RT_THEME:
+        theme_apply(settings_theme_idx);
+        break;
+    case RT_FONT:
+        if (font_count > 0) font_load_file(font_files[settings_font_idx]);
+        break;
+    case RT_RANGE:
+        if (r->val == &settings_brightness)
+            cube_set_backlight(settings_brightness);
+        break;
+    case RT_TOGGLE:
+        if (r->val == &settings_anim) banner_set_anim(settings_anim);
+        break;
+    default:
+        break;
+    }
 }
 
 static void settings_load_file(void) {
@@ -757,6 +803,8 @@ static void settings_save_file(void) {
     fflush(f);
     fsync(fileno(f));
     fclose(f);
+    cube_pmem_backlight_sync(settings_brightness);
+    settings_write_volume();
     sync();  /* SD-card flush */
     { char buf[64]; snprintf(buf, sizeof(buf), "settings save: filter=%s idx=%d",
                                                 filter_names[settings_filter_idx], settings_filter_idx);
@@ -1225,10 +1273,19 @@ static void render_boxart_panel(uint16_t *fb, const char *full_path, const char 
     int ph   = bot - top;
     if (pw < UI_S(60) || ph < UI_S(60)) return;          /* too narrow to bother */
 
-    char tpath[1024];
-    get_thumbnail_path(full_path, tpath, sizeof tpath);
-    Thumbnail tb;
-    if (!(load_thumbnail(tpath, &tb) && tb.data)) return; /* no art → no panel */
+    /* Cache the decoded thumbnail; only re-decode when the selected game changes.
+     * The old code ran stbi_load (PNG/JPG decode) EVERY frame -> scrolling crawled. */
+    static char cached_path[1024] = "";
+    static Thumbnail ctb; static int chas = 0;
+    if (strcmp(full_path, cached_path) != 0) {
+        if (chas) { free_thumbnail(&ctb); chas = 0; }
+        char tpath[1024];
+        get_thumbnail_path(full_path, tpath, sizeof tpath);
+        if (load_thumbnail(tpath, &ctb) && ctb.data) chas = 1;
+        strncpy(cached_path, full_path, sizeof cached_path - 1);
+        cached_path[sizeof cached_path - 1] = 0;
+    }
+    if (!chas) return;   /* no art → no panel */
 
     int nameh = UI_S(22);
     int aw = pw, ah = ph - nameh;
@@ -1236,8 +1293,7 @@ static void render_boxart_panel(uint16_t *fb, const char *full_path, const char 
      * opaque card: covers list-text overflow, and transparent box art shows
      * the real background through it. */
     banner_fill_region(fb, px, top, pw, ph, COLOR_BG);
-    switcher_blit565(fb, tb.data, tb.alpha, tb.width, tb.height, px, top, aw, ah);
-    free_thumbnail(&tb);
+    switcher_blit565(fb, ctb.data, ctb.alpha, ctb.width, ctb.height, px, top, aw, ah);
 
     /* Name centered under the art, truncated to panel width. */
     char nm[64];
@@ -1566,22 +1622,30 @@ static void handle_remap_wizard(void) {
 
 static void handle_settings_menu(void) {
     extern const int theme_count;
+    /* Settings used to use edge-only presses while the browser used the
+     * time-based repeat path. Keep both menus equally responsive, including
+     * smooth scrolling/adjusting while a direction is held. */
+    bool up    = input_repeat(FROG_BTN_UP);
+    bool down  = input_repeat(FROG_BTN_DOWN);
+    bool left  = input_repeat(FROG_BTN_LEFT);
+    bool right = input_repeat(FROG_BTN_RIGHT);
+
     /* Land on a real option, never a header. */
     if (!settings_row_selectable(settings_menu_idx)) {
         settings_menu_idx = 1;
         while (settings_menu_idx < SETTINGS_ROW_N && !settings_row_selectable(settings_menu_idx))
             settings_menu_idx++;
     }
-    if (input_was_pressed(FROG_BTN_UP)) {
+    if (up) {
         do { settings_menu_idx = (settings_menu_idx - 1 + SETTINGS_ROW_N) % SETTINGS_ROW_N; }
         while (!settings_row_selectable(settings_menu_idx));
     }
-    if (input_was_pressed(FROG_BTN_DOWN)) {
+    if (down) {
         do { settings_menu_idx = (settings_menu_idx + 1) % SETTINGS_ROW_N; }
         while (!settings_row_selectable(settings_menu_idx));
     }
-    if (input_was_pressed(FROG_BTN_LEFT) || input_was_pressed(FROG_BTN_RIGHT)) {
-        int delta = input_was_pressed(FROG_BTN_RIGHT) ? 1 : -1;
+    if (left || right) {
+        int delta = right ? 1 : -1;
         const SRow *r = &settings_rows[settings_menu_idx];
         switch (r->type) {
         case RT_THEME:
@@ -1608,7 +1672,7 @@ static void handle_settings_menu(void) {
             break;
         default: break;
         }
-        settings_apply();
+        settings_preview_row(r);
     }
     if (input_was_pressed(FROG_BTN_A) && settings_rows[settings_menu_idx].type == RT_ACTION) {
         remap_step = 0;
@@ -1806,11 +1870,11 @@ static void handle_input(void) {
         }
     }
 
-    if (input_was_pressed(FROG_BTN_UP) && selected_index > 0) {
+    if (input_repeat(FROG_BTN_UP) && selected_index > 0) {
         selected_index--;
         if (selected_index < scroll_offset) scroll_offset = selected_index;
     }
-    if (input_was_pressed(FROG_BTN_DOWN) && selected_index < entry_count-1) {
+    if (input_repeat(FROG_BTN_DOWN) && selected_index < entry_count-1) {
         selected_index++;
         if (selected_index >= scroll_offset + VISIBLE_ENTRIES)
             scroll_offset = selected_index - VISIBLE_ENTRIES + 1;
@@ -1818,7 +1882,7 @@ static void handle_input(void) {
     /* In the game switcher (one game on screen at a time), Left/Right step one
      * game like Up/Down — no page jumping. */
     bool switcher = viewing_recents && settings_game_switcher;
-    if (input_was_pressed(FROG_BTN_LEFT)) {
+    if (input_repeat(FROG_BTN_LEFT)) {
         if (switcher) {
             if (selected_index > 0) selected_index--;
         } else {
@@ -1826,7 +1890,7 @@ static void handle_input(void) {
             if (selected_index < scroll_offset) scroll_offset = selected_index;
         }
     }
-    if (input_was_pressed(FROG_BTN_RIGHT)) {
+    if (input_repeat(FROG_BTN_RIGHT)) {
         if (switcher) {
             if (selected_index < entry_count-1) selected_index++;
         } else {
@@ -2129,13 +2193,31 @@ void retro_run(void) {
                 banner_path = sel_path;
             }
         }
-        if (viewing_recents != banner_last_recents ||
-            viewing_favourites != banner_last_favourites ||
-            strcmp(banner_path, banner_last_path) != 0 ||
-            selected_index != banner_last_sel ||
-            settings_backgrounds != banner_last_bg ||
-            settings_wallpaper_idx != banner_last_wp ||
-            settings_wallpaper_fit != banner_last_wpfit) {
+        /* Reload ONLY when the background actually changes.
+         * - A single WALLPAPER is the same image in every view: decode it ONCE
+         *   and never reload on folder/view/selection change (only when the
+         *   wallpaper choice, fit, or backgrounds toggle changes). This was the
+         *   scroll killer - the wallpaper was re-decoded + re-scaled on every
+         *   folder change.
+         * - Otherwise the per-system art depends on banner_path (which already
+         *   encodes root folder-preview + special entries), never selected_index
+         *   directly. */
+        (void)banner_last_sel;
+        int wp_active = settings_backgrounds && settings_wallpaper_idx > 0;
+        int need_reload;
+        if (wp_active) {
+            need_reload = (settings_wallpaper_idx != banner_last_wp ||
+                           settings_wallpaper_fit != banner_last_wpfit ||
+                           settings_backgrounds  != banner_last_bg);
+        } else {
+            need_reload = (viewing_recents != banner_last_recents ||
+                           viewing_favourites != banner_last_favourites ||
+                           strcmp(banner_path, banner_last_path) != 0 ||
+                           settings_backgrounds != banner_last_bg ||
+                           settings_wallpaper_idx != banner_last_wp ||
+                           settings_wallpaper_fit != banner_last_wpfit);
+        }
+        if (need_reload) {
             load_banner_for_view(banner_path, viewing_recents, viewing_favourites);
             banner_last_recents = viewing_recents;
             banner_last_favourites = viewing_favourites;
@@ -2147,6 +2229,57 @@ void retro_run(void) {
             banner_last_path[MAX_PATH_LEN - 1] = '\0';
         }
     }
+
+    /* Redraw-only-when-dirty for the browser and Settings. Most calls have no
+     * visual change,
+     * so neither recompose nor re-present the old frame: R36SX's presenter waits
+     * for vsync (~16.7ms), and calling it while idle needlessly limits input
+     * polling to 60Hz. A short sleep keeps the idle loop cheap while still
+     * sampling input at roughly 1kHz. Search/picker/remap overlays remain
+     * continuously drawn for now. */
+    int can_skip_idle = !(search_kbd_active || core_picker_active ||
+                          remap_wizard_active);
+    int redraw = 1;
+    if (can_skip_idle) {
+        static unsigned last_sig = 0; static int first = 1;
+        unsigned sig = 5381u;
+        sig = sig*33u + (unsigned)settings_menu_active;
+        if (settings_menu_active) {
+            sig = sig*33u + (unsigned)settings_menu_idx;
+            sig = sig*33u + (unsigned)settings_theme_idx;
+            sig = sig*33u + (unsigned)settings_font_idx;
+            sig = sig*33u + (unsigned)settings_wallpaper_idx;
+            sig = sig*33u + (unsigned)settings_wallpaper_fit;
+            for (int i = 0; i < SETTINGS_ROW_N; i++)
+                if (settings_rows[i].val)
+                    sig = sig*33u + (unsigned)*settings_rows[i].val;
+        } else {
+            sig = sig*33u + (unsigned)selected_index;
+            sig = sig*33u + (unsigned)scroll_offset;
+            sig = sig*33u + (unsigned)(viewing_recents*4 + viewing_favourites*2 + viewing_search);
+            for (const char *p = current_path; *p; p++) sig = sig*33u + (unsigned char)*p;
+        }
+        redraw = first || sig != last_sig || banner_is_animating();
+        last_sig = sig; first = 0;
+    }
+    if (!redraw) {
+        /* The recents carousel intentionally has no header, so its boot path
+         * used to skip frogui_battery_pct() and never clear cubevol's old
+         * top-right glyph. Keep that zone hidden in every view, including
+         * after a later cubevol charge-status repaint. At the ~1 ms idle-loop
+         * cadence this is about 10 clears/sec, while the mmap itself is cached. */
+        static unsigned fb1_idle_ticks = 0;
+        if (++fb1_idle_ticks >= 100) {
+            fb1_idle_ticks = 0;
+            fb1_clear_battery_zone();
+        }
+        usleep(1000);
+        return;
+    }
+    /* Clear immediately on the first carousel frame and every real redraw.
+     * Only the top-right battery zone is touched; cubevol's centered volume
+     * popup remains available. */
+    fb1_clear_battery_zone();
 
     if (search_kbd_active) {
         render_search_kbd();

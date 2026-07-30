@@ -41,6 +41,7 @@ void input_update(void);
 /* Current state (updated by input_update). */
 bool input_is_pressed(FrogButton btn);
 bool input_was_pressed(FrogButton btn);   /* true only on rising edge this frame */
+bool input_repeat(FrogButton btn);        /* edge, then auto-repeats while held (time-based) */
 
 /* Raw 16-bit cubevol value (needed by remap wizard). */
 uint32_t input_get_raw_state(void);

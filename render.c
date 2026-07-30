@@ -134,19 +134,10 @@ void render_battery(uint16_t *framebuffer, int pct) {
     extern int frogui_battery_color_mode(void);
     int charging = frogui_battery_charging();
 
-    /* "Nel" battery colour mode: a single solid dot, colour = level band.
-     * Green 70-100, Blue 30-70, Red 0-30 (charging = green). */
-    if (frogui_battery_color_mode()) {
-        uint16_t c = charging ? 0x2FE6
-                   : (pct >= 70) ? 0x2FE6      /* green */
-                   : (pct >= 30) ? 0x041F      /* blue  */
-                                 : 0xF800;     /* red   */
-        int d = UI_S(12);
-        int cx = SCREEN_WIDTH - PADDING - d;
-        int cy = 10 + UI_S(1);
-        render_rounded_rect(framebuffer, cx, cy, d, d, d/2, c);
-        return;
-    }
+    /* Same battery glyph in both modes. "Battery Colour Mode" just changes the
+     * fill colour to a level band: green 70-100, blue 30-70, red 0-30 (charging
+     * = green). Normal mode: accent fill, red under 15%. */
+    int color_mode = frogui_battery_color_mode();
 
     /* NextUI-style: rounded body + a little terminal nub, fill proportional. */
     int bw = UI_S(26), bh = UI_S(13);        /* body */
@@ -157,7 +148,11 @@ void render_battery(uint16_t *framebuffer, int pct) {
 
     uint16_t outline = COLOR_HEADER;
     uint16_t green   = 0x2FE6;                /* charging fill */
-    uint16_t fillcol = charging ? green : ((pct <= 15) ? 0xF800 /*red*/ : COLOR_HEADER);
+    uint16_t fillcol;
+    if (color_mode)
+        fillcol = charging ? green : (pct >= 70) ? green : (pct >= 30) ? 0x041F : 0xF800;
+    else
+        fillcol = charging ? green : ((pct <= 15) ? 0xF800 /*red*/ : COLOR_HEADER);
 
     /* body outline (rounded), hollow */
     int r = UI_S(3);

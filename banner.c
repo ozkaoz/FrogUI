@@ -33,7 +33,54 @@ void banner_set_anim(int enabled) {
     if (!banner_anim) fade_frame = FADE_FRAMES;
 }
 
+/* LRU cache of fully-decoded + transformed panel-res backgrounds, keyed by
+ * "path|mode". Root scrolling flips between folder backgrounds constantly; without
+ * this each step re-decoded a PNG. A cache hit is just a memcpy. */
+#define BCACHE_N 6
+static struct { char key[600]; uint16_t *buf; int valid; } bcache[BCACHE_N];
+static int bcache_next;
+static int bcache_find(const char *key) {
+    for (int i = 0; i < BCACHE_N; i++)
+        if (bcache[i].valid && strcmp(bcache[i].key, key) == 0) return i;
+    return -1;
+}
+static void bcache_store(const char *key, const uint16_t *src, int npix) {
+    int i = bcache_next; bcache_next = (bcache_next + 1) % BCACHE_N;
+    if (!bcache[i].buf) bcache[i].buf = malloc((size_t)npix * 2);
+    if (!bcache[i].buf) { bcache[i].valid = 0; return; }
+    memcpy(bcache[i].buf, src, (size_t)npix * 2);
+    strncpy(bcache[i].key, key, sizeof bcache[i].key - 1);
+    bcache[i].key[sizeof bcache[i].key - 1] = 0;
+    bcache[i].valid = 1;
+}
+
+static void banner_snapshot_for_fade(int sw, int sh) {
+    if (banner_anim && banner_loaded && banner_buf) {
+        if (!banner_prev) banner_prev = malloc(sw * sh * sizeof(uint16_t));
+        if (banner_prev) { memcpy(banner_prev, banner_buf, sw * sh * sizeof(uint16_t)); fade_frame = 0; }
+        else fade_frame = FADE_FRAMES;
+    } else {
+        fade_frame = FADE_FRAMES;
+    }
+}
+
 static void banner_load_common(const char *path, int mode, uint16_t bg) {
+    int sw = SCREEN_WIDTH, sh = SCREEN_HEIGHT, npix = sw * sh;
+    char key[600];
+    snprintf(key, sizeof key, "%s|%d", path, mode);
+
+    if (!banner_buf) banner_buf = malloc(npix * sizeof(uint16_t));
+    if (!banner_buf) { banner_loaded = 0; return; }
+
+    /* Cache hit: no decode, just fade-snapshot + copy the cached result. */
+    int ci = bcache_find(key);
+    if (ci >= 0) {
+        banner_snapshot_for_fade(sw, sh);
+        memcpy(banner_buf, bcache[ci].buf, (size_t)npix * 2);
+        banner_loaded = 1;
+        return;
+    }
+
     int w, h, ch;
     unsigned char *img = stbi_load(path, &w, &h, &ch, 3);
     if (!img || w <= 0 || h <= 0) {
@@ -42,28 +89,7 @@ static void banner_load_common(const char *path, int mode, uint16_t bg) {
         return;
     }
 
-    int sw = SCREEN_WIDTH, sh = SCREEN_HEIGHT;
-    if (!banner_buf)
-        banner_buf = malloc(sw * sh * sizeof(uint16_t));
-    if (!banner_buf) {
-        stbi_image_free(img);
-        banner_loaded = 0;
-        return;
-    }
-
-    /* snapshot the outgoing banner for crossfade */
-    if (banner_anim && banner_loaded) {
-        if (!banner_prev)
-            banner_prev = malloc(sw * sh * sizeof(uint16_t));
-        if (banner_prev) {
-            memcpy(banner_prev, banner_buf, sw * sh * sizeof(uint16_t));
-            fade_frame = 0;
-        } else {
-            fade_frame = FADE_FRAMES;
-        }
-    } else {
-        fade_frame = FADE_FRAMES;
-    }
+    banner_snapshot_for_fade(sw, sh);
 
     /* Placement: dst rect [dx0,dx0+dw) x [dy0,dy0+dh) that the (scaled) image
      * covers; pixels outside it get bg. For FILL the rect exceeds the screen
@@ -105,6 +131,7 @@ static void banner_load_common(const char *path, int mode, uint16_t bg) {
 
     stbi_image_free(img);
     banner_loaded = 1;
+    bcache_store(key, banner_buf, npix);   /* cache the transformed result */
 }
 
 void banner_load(const char *path) {
@@ -144,6 +171,11 @@ void banner_render(uint16_t *framebuffer) {
 
 int banner_is_loaded(void) {
     return banner_loaded;
+}
+
+/* True while a crossfade is in progress (background still changing each frame). */
+int banner_is_animating(void) {
+    return banner_anim && banner_prev && fade_frame < FADE_FRAMES;
 }
 
 /* Repaint a rect with the current background: the banner image slice when one
