@@ -352,6 +352,10 @@ static uint16_t *framebuffer = NULL;
 static bool shutdown_requested = false;
 static bool viewing_recents = false;
 static bool viewing_favourites = false;
+#define SYSTEM_CAROUSEL_FRAMES 12
+static int system_carousel_frame = SYSTEM_CAROUSEL_FRAMES + 1;
+static float system_carousel_start_offset = 0.0f;
+static float system_carousel_visible_offset = 0.0f;
 
 /* Search (X button): on-screen keyboard → filtered results.
  * Scope = the folder you were in (ROMS_PATH root = search everything). */
@@ -417,10 +421,13 @@ static void fb1_clear_battery_zone(void) {
  * clears cubevol's battery corner each call so its glyph stays hidden. Called by
  * render_header (every screen, every frame). */
 static int raw_to_pct(int raw) {
-    static const int rx[] = { 64, 153, 224, 255 };
-    static const int py[] = {  0,  50,  80, 100 };
+    /* The ADC tops out around 224 on a charged pack. The old curve reserved
+     * 100% for the byte maximum (255), so real hardware could never display a
+     * full battery. Keep the measured low/mid points and plateau at 224. */
+    static const int rx[] = { 64, 153, 224 };
+    static const int py[] = {  0,  50, 100 };
     if (raw <= rx[0]) return 0;
-    for (int i = 1; i < 4; i++) if (raw <= rx[i]) {
+    for (int i = 1; i < 3; i++) if (raw <= rx[i]) {
         int sp = rx[i]-rx[i-1]; return py[i-1] + (py[i]-py[i-1])*(raw-rx[i-1])/(sp?sp:1); }
     return 100;
 }
@@ -591,10 +598,11 @@ static int settings_filter_idx_on_enter = 0;  /* snapshot for restart-on-change 
 static int settings_quick_resume = 0;      /* boot straight into last game: 0=off, 1=on. Settings key stays "auto_resume" for upgrade compat. */
 static int settings_autosave_autoload = 0; /* auto-save on pause/quit + auto-load on any game launch (boot or manual pick): 0=off, 1=on */
 static int settings_anim = 1;           /* UI animations: 0=off, 1=on */
+static int settings_horizontal = 0;     /* horizontal system carousel: 0=off, 1=on */
 static int settings_hide_empty = 1;     /* hide rom folders with no games: 0=off, 1=on */
 static int settings_hide_extensions = 1; /* hide file extensions in the browser: 0=off, 1=on */
 static int settings_backgrounds = 1;     /* show per-system background images: 0=off (solid theme bg), 1=on */
-static int settings_folder_cache = 1;    /* cache folder listings (mtime-keyed) for fast nav: 0=off, 1=on */
+static int settings_file_cache = 0;      /* cache folder listings (mtime-keyed) for fast nav: 0=off, 1=on */
 static int settings_battery_color = 0;   /* "Nel Battery Mode": solid color light by level instead of fill bar */
 int frogui_battery_color_mode(void) { return settings_battery_color; }
 static int settings_game_switcher = 1;  /* recents as box-art carousel: 0=off, 1=on */
@@ -611,7 +619,8 @@ static const char *onoff_names[] = {"off", "on"};
  * options. Adding, reordering, or grouping = just editing this table; the nav,
  * adjust, and render code all iterate it. TOGGLE/RANGE point at their int; THEME
  * and FONT are special (dynamic option lists); ACTION opens the remap wizard. */
-typedef enum { RT_HEADER, RT_TOGGLE, RT_RANGE, RT_THEME, RT_FONT, RT_WALLPAPER, RT_WALLFIT, RT_ACTION } SRowType;
+typedef enum { RT_HEADER, RT_TOGGLE, RT_RANGE, RT_THEME, RT_FONT, RT_WALLPAPER,
+               RT_WALLFIT, RT_CACHE_REBUILD, RT_ACTION } SRowType;
 typedef struct {
     SRowType type;
     const char *label;
@@ -622,6 +631,7 @@ typedef struct {
 static const SRow settings_rows[] = {
     { RT_HEADER, "APPEARANCE" },
     { RT_THEME,  "Theme" },
+    { RT_TOGGLE, "Horizontal Layout", &settings_horizontal },
     { RT_FONT,   "Font" },
     { RT_RANGE,  "Brightness", &settings_brightness, 0, 100, SETTINGS_BRIGHTNESS_STEP },
     { RT_TOGGLE, "Animations", &settings_anim },
@@ -639,7 +649,8 @@ static const SRow settings_rows[] = {
     { RT_TOGGLE, "Auto-Save/Auto-Load", &settings_autosave_autoload },
     { RT_HEADER, "SYSTEM" },
     { RT_RANGE,  "Volume", &settings_volume, 0, 100, 5 },
-    { RT_TOGGLE, "Folder Cache", &settings_folder_cache },
+    { RT_TOGGLE, "File Cache", &settings_file_cache },
+    { RT_CACHE_REBUILD, "Rebuild File Cache" },
     { RT_TOGGLE, "Disable Sleep (restart)", &settings_disable_sleep },
     { RT_ACTION, "Button Mapping" },
 };
@@ -728,8 +739,15 @@ static void settings_load_file(void) {
         char *nl = strchr(val, '\n'); if (nl) *nl = '\0';
         char *cr = strchr(val, '\r'); if (cr) *cr = '\0';
         if (strcmp(line, "theme") == 0) {
-            for (int i = 0; i < theme_count; i++)
-                if (strcmp(themes[i].name, val) == 0) { settings_theme_idx = i; break; }
+            /* v1.0.11 briefly shipped Horizontal as a colour theme. Preserve
+             * that layout choice while migrating back to the default colours. */
+            if (strcmp(val, "Horizontal") == 0) {
+                settings_theme_idx = 0;
+                settings_horizontal = 1;
+            } else {
+                for (int i = 0; i < theme_count; i++)
+                    if (strcmp(themes[i].name, val) == 0) { settings_theme_idx = i; break; }
+            }
         } else if (strcmp(line, "font") == 0) {
             for (int i = 0; i < font_count; i++)
                 if (strcasecmp(font_files[i], val) == 0 ||
@@ -750,6 +768,8 @@ static void settings_load_file(void) {
                 if (strcmp(filter_names[i], val) == 0) { settings_filter_idx = i; break; }
         } else if (strcmp(line, "animations") == 0) {
             settings_anim = (strcmp(val, "off") == 0) ? 0 : 1;
+        } else if (strcmp(line, "horizontal_layout") == 0) {
+            settings_horizontal = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "auto_resume") == 0) {
             settings_quick_resume = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "autosave_autoload") == 0) {
@@ -760,8 +780,12 @@ static void settings_load_file(void) {
             settings_hide_extensions = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "backgrounds") == 0) {
             settings_backgrounds = (strcmp(val, "on") == 0) ? 1 : 0;
+        } else if (strcmp(line, "file_cache") == 0) {
+            settings_file_cache = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "folder_cache") == 0) {
-            settings_folder_cache = (strcmp(val, "on") == 0) ? 1 : 0;
+            /* Legacy builds defaulted this to on. Reset upgrades to the new
+             * off-by-default policy; saving Settings writes file_cache. */
+            settings_file_cache = 0;
         } else if (strcmp(line, "battery_color") == 0) {
             settings_battery_color = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "disable_sleep") == 0) {
@@ -792,10 +816,11 @@ static void settings_save_file(void) {
     fprintf(f, "auto_resume=%s\n", onoff_names[settings_quick_resume]);
     fprintf(f, "autosave_autoload=%s\n", onoff_names[settings_autosave_autoload]);
     fprintf(f, "animations=%s\n", onoff_names[settings_anim]);
+    fprintf(f, "horizontal_layout=%s\n", onoff_names[settings_horizontal]);
     fprintf(f, "hide_empty=%s\n", onoff_names[settings_hide_empty]);
     fprintf(f, "hide_extensions=%s\n", onoff_names[settings_hide_extensions]);
     fprintf(f, "backgrounds=%s\n", onoff_names[settings_backgrounds]);
-    fprintf(f, "folder_cache=%s\n", onoff_names[settings_folder_cache]);
+    fprintf(f, "file_cache=%s\n", onoff_names[settings_file_cache]);
     fprintf(f, "battery_color=%s\n", onoff_names[settings_battery_color]);
     fprintf(f, "game_switcher=%s\n", onoff_names[settings_game_switcher]);
     fprintf(f, "load_recents=%s\n", onoff_names[settings_load_recents]);
@@ -838,6 +863,72 @@ static const char* get_console_folder(const char *path) {
 #define SETTINGS_ENTRY_NAME    ">> Settings"
 #define RECENTS_ENTRY_NAME     ">> Recents"
 #define FAVOURITES_ENTRY_NAME  ">> Favourites"
+
+typedef struct {
+    const char *folder;
+    const char *label;
+} SystemLabel;
+
+/* Folder names remain the stable lookup key for cores and artwork. The
+ * horizontal picker gets friendlier names without changing that contract. */
+static const SystemLabel system_labels[] = {
+    {"a26", "Atari 2600"}, {"a5200", "Atari 5200"}, {"a78", "Atari 7800"},
+    {"a800", "Atari 8-bit"}, {"lnx", "Atari Lynx"},
+    {"fc", "Nintendo Entertainment System"},
+    {"nes", "Nintendo Entertainment System"}, {"nesq", "NES - QuickNES"},
+    {"nest", "NES - Nestopia"}, {"fds", "Famicom Disk System"},
+    {"sfc", "Super Nintendo"}, {"snes", "Super Nintendo"},
+    {"snes02", "SNES - Fast"},
+    {"gb", "Game Boy"}, {"gbgb", "Game Boy - Gearboy"},
+    {"gbb", "Game Boy - TGB Dual"}, {"dblcherrygb", "Double Cherry GB"},
+    {"gba", "Game Boy Advance"}, {"gbac", "GBA - Multicore"},
+    {"gbav", "GBA - VBA Next"}, {"gbaf", "GBA - mGBA"},
+    {"mgba", "GBA - mGBA"},
+    {"md", "Mega Drive / Genesis"}, {"sms", "Master System"},
+    {"sega", "Mega Drive / Genesis"}, {"gg", "Game Gear"},
+    {"gpgx", "Genesis Plus GX"}, {"segacd", "Sega CD"}, {"32x", "Sega 32X"},
+    {"pce", "PC Engine"}, {"pcesgx", "PC Engine SuperGrafx"},
+    {"ngpc", "Neo Geo Pocket"}, {"neogeo", "Neo Geo"},
+    {"geolith", "Neo Geo"},
+    {"wswan", "WonderSwan"}, {"wsv", "WonderSwan - Potator"},
+    {"vb", "Virtual Boy"}, {"pcfx", "PC-FX"},
+    {"ps", "PlayStation"}, {"psx", "PlayStation"},
+    {"ps1", "PlayStation"}, {"ps1r", "PlayStation - ReARMed"},
+    {"psp", "PlayStation Portable"},
+    {"m2k", "Arcade - MAME 2000"}, {"cps1", "Arcade - Capcom CPS-1"},
+    {"cps2", "Arcade - Capcom CPS-2"}, {"cps3", "Arcade - Capcom CPS-3"},
+    {"c64", "Commodore 64"}, {"c64sc", "Commodore 64"},
+    {"c64f", "Commodore 64 - Frodo"}, {"c64fc", "Commodore 64 - Frodo"},
+    {"amiga", "Commodore Amiga"}, {"vic20", "Commodore VIC-20"},
+    {"atari-st", "Atari ST"}, {"msx", "MSX"}, {"msx2", "MSX2"},
+    {"spec", "ZX Spectrum"}, {"zx", "ZX Spectrum"}, {"zx81", "ZX81"},
+    {"col", "ColecoVision"}, {"amstrad", "Amstrad CPC"},
+    {"amstradb", "Amstrad CPC Plus"}, {"thom", "Thomson MO / TO"},
+    {"xmil", "Sharp X68000"}, {"pico286", "DOS / PC"},
+    {"dos", "DOS"}, {"prboom", "Doom"}, {"doom", "Doom"},
+    {"quake", "Quake"}, {"quake2", "Quake II"}, {"wolf3d", "Wolfenstein 3D"},
+    {"outrun", "Out Run"}, {"cavestory", "Cave Story"},
+    {"flashback", "Flashback"}, {"xrick", "Rick Dangerous"},
+    {"jnb", "Jump 'n Bump"}, {"gw", "Game & Watch"},
+    {"tic80", "TIC-80"}, {"pico8", "PICO-8"}, {"fake08", "PICO-8"},
+    {"retro8", "PICO-8 - Retro8"}, {"lowres-nx", "LowRes NX"},
+    {"pokem", "Pokemon Mini"}, {"int", "Intellivision"},
+    {"fcf", "Fairchild Channel F"}, {"cdg", "CD+G Karaoke"},
+    {"chip8", "CHIP-8"}, {"arduboy", "Arduboy"},
+    {"arduous", "Arduboy - Accurate"}, {"vec", "Vectrex"},
+    {"o2em", "Odyssey 2"}, {"gme", "Game Music"},
+    {"gong", "Pong"}, {"vapor", "VaporSpec"}, {"rockbox", "Music"}
+};
+
+static const char *system_display_name(const char *folder) {
+    if (strcmp(folder, SETTINGS_ENTRY_NAME) == 0) return "Settings";
+    if (strcmp(folder, RECENTS_ENTRY_NAME) == 0) return "Recent Games";
+    if (strcmp(folder, FAVOURITES_ENTRY_NAME) == 0) return "Favourites";
+    for (size_t i = 0; i < sizeof(system_labels) / sizeof(system_labels[0]); i++)
+        if (strcasecmp(folder, system_labels[i].folder) == 0)
+            return system_labels[i].label;
+    return folder;
+}
 
 #define BANNER_DIR SDCARD_BASE "/frogui"
 
@@ -943,7 +1034,7 @@ static int folder_has_games(const char *path, int depth) {
  * bounds-checked; ANY inconsistency (bad magic, path mismatch, mtime/hide_empty
  * change, short/corrupt file, alloc fail) falls through to a full rescan, which
  * then rewrites the cache. Cache lives in frogui/.cache/, never in the rom dirs,
- * and the whole feature is behind settings_folder_cache so it can be turned off. */
+ * and the whole feature is behind settings_file_cache so it can be turned off. */
 #define CACHE_DIR   SETTINGS_DIR "/.cache"
 #define CACHE_MAGIC 0x32435546u    /* "FUC2" */
 #define CACHE_MAX_ENTRIES 100000   /* sanity cap to reject a corrupt count */
@@ -955,6 +1046,24 @@ static void cache_file_for(const char *path, char *out, size_t n) {
     for (const unsigned char *p = (const unsigned char *)path; *p; p++)
         h = ((h << 5) + h) ^ *p;
     snprintf(out, n, CACHE_DIR "/%08lx.bin", h & 0xffffffffUL);
+}
+
+static void cache_clear(void) {
+    DIR *dir = opendir(CACHE_DIR);
+    if (!dir) return;
+    struct dirent *e;
+    while ((e = readdir(dir)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        size_t len = strlen(e->d_name);
+        if (len < 4 ||
+            (strcasecmp(e->d_name + len - 4, ".bin") != 0 &&
+             strcasecmp(e->d_name + len - 4, ".tmp") != 0))
+            continue;
+        char path[MAX_PATH_LEN];
+        snprintf(path, sizeof path, CACHE_DIR "/%s", e->d_name);
+        unlink(path);
+    }
+    closedir(dir);
 }
 
 /* Fill entries[]/entry_count from cache if valid for (path, mtime, hide_empty).
@@ -1042,7 +1151,7 @@ static void scan_directory(const char *path) {
      * listing from disk and skip readdir/stat/empty-check/sort entirely. */
     struct stat dst;
     int have_mtime = (stat(path, &dst) == 0);
-    int cached = settings_folder_cache && have_mtime &&
+    int cached = settings_file_cache && have_mtime &&
                  cache_load(path, (uint64_t)dst.st_mtime, at_root);
 
     if (!cached) {
@@ -1087,7 +1196,7 @@ static void scan_directory(const char *path) {
         if (entry_count > 1)
             qsort(entries, entry_count, sizeof(DirEntry), direntry_cmp);
         /* Persist the freshly-scanned listing for next time. */
-        if (settings_folder_cache && have_mtime)
+        if (settings_file_cache && have_mtime)
             cache_store(path, (uint64_t)dst.st_mtime, at_root);
     }
     /* Append Settings at end, prepend Recents+Favourites at top */
@@ -1678,6 +1787,22 @@ static void handle_settings_menu(void) {
         }
         settings_preview_row(r);
     }
+    if (input_was_pressed(FROG_BTN_A) &&
+        settings_rows[settings_menu_idx].type == RT_CACHE_REBUILD) {
+        /* Rebuilding opts in, removes every old/corrupt cache entry, and
+         * immediately regenerates the root library index. System folders are
+         * then refreshed lazily the first time they are opened. */
+        settings_file_cache = 1;
+        cache_clear();
+        scan_directory(ROMS_PATH);
+        settings_save_file();
+        strncpy(current_path, ROMS_PATH, MAX_PATH_LEN-1);
+        current_path[MAX_PATH_LEN-1] = '\0';
+        selected_index = 0;
+        scroll_offset = 0;
+        settings_menu_active = false;
+        return;
+    }
     if (input_was_pressed(FROG_BTN_A) && settings_rows[settings_menu_idx].type == RT_ACTION) {
         remap_step = 0;
         remap_prev_raw = input_get_raw_state();
@@ -1694,6 +1819,113 @@ static void handle_settings_menu(void) {
         strncpy(current_path, ROMS_PATH, MAX_PATH_LEN-1);
         selected_index = 0; scroll_offset = 0;
     }
+}
+
+static bool horizontal_system_view(void) {
+    return settings_horizontal &&
+           strcmp(current_path, ROMS_PATH) == 0 &&
+           !viewing_recents && !viewing_favourites && !viewing_search;
+}
+
+static bool system_carousel_is_animating(void) {
+    return horizontal_system_view() && settings_anim &&
+           system_carousel_frame <= SYSTEM_CAROUSEL_FRAMES;
+}
+
+static void system_carousel_start(int direction) {
+    if (settings_anim) {
+        /* selected_index has already moved. Carry over the current visual
+         * offset so a second tap does not restart the labels from a whole slot
+         * away and visibly jump. */
+        system_carousel_start_offset =
+            system_carousel_visible_offset + (float)direction;
+        system_carousel_frame = 0;
+    } else {
+        system_carousel_start_offset = 0.0f;
+        system_carousel_visible_offset = 0.0f;
+        system_carousel_frame = SYSTEM_CAROUSEL_FRAMES + 1;
+    }
+}
+
+static float system_carousel_ease(void) {
+    if (!settings_anim || system_carousel_frame > SYSTEM_CAROUSEL_FRAMES)
+        return 1.0f;
+    float p = (float)system_carousel_frame / (float)SYSTEM_CAROUSEL_FRAMES;
+    return p * p * (3.0f - 2.0f * p);
+}
+
+static int system_carousel_delta(int index) {
+    int delta = index - selected_index;
+    if (entry_count > 1) {
+        while (delta > entry_count / 2) delta -= entry_count;
+        while (delta < -(entry_count / 2)) delta += entry_count;
+    }
+    return delta;
+}
+
+static void fit_system_label(const char *source, char *dest, size_t size, int max_width) {
+    size_t keep = strlen(source);
+    if (size < 5) {
+        if (size > 0) dest[0] = '\0';
+        return;
+    }
+    if (keep > size - 4) keep = size - 4;
+    snprintf(dest, size, "%s", source);
+    while (keep > 1 && font_measure_text(dest) > max_width) {
+        keep--;
+        snprintf(dest, size, "%.*s...", (int)keep, source);
+    }
+}
+
+static void render_system_carousel(uint16_t *fb) {
+    render_header(fb, "TREEFROGUI");
+    if (entry_count <= 0) {
+        render_legend(fb, LEGEND_X_NONE, 0, 1);
+        return;
+    }
+
+    int slot_width = SCREEN_WIDTH / 3;
+    int center_x = SCREEN_WIDTH / 2;
+    int text_y = SCREEN_HEIGHT * 3 / 5;
+    float ease = system_carousel_ease();
+    float offset = system_carousel_start_offset * (1.0f - ease);
+    system_carousel_visible_offset = offset;
+
+    for (int i = 0; i < entry_count; i++) {
+        int delta = system_carousel_delta(i);
+        float position = (float)delta + offset;
+        if (position < -2.0f || position > 2.0f) continue;
+
+        char label[96];
+        fit_system_label(system_display_name(entries[i].name), label, sizeof label,
+                         slot_width - UI_S(22));
+        int text_width = font_measure_text(label);
+        int x = center_x + (int)(position * slot_width) - text_width / 2;
+        if (x + text_width < 0 || x >= SCREEN_WIDTH) continue;
+
+        if (i == selected_index) {
+            render_text_pillbox(fb, x, text_y, label,
+                                COLOR_SELECT_BG, COLOR_SELECT_TEXT, UI_S(7));
+        } else {
+            render_text_pillbox(fb, x, text_y, label,
+                                COLOR_LEGEND_BG, COLOR_DISABLED, UI_S(7));
+        }
+    }
+
+    char count[32];
+    snprintf(count, sizeof count, "%d / %d", selected_index + 1, entry_count);
+    int count_x = (SCREEN_WIDTH - font_measure_text(count)) / 2;
+    font_draw_text(fb, SCREEN_WIDTH, SCREEN_HEIGHT, count_x,
+                   text_y + ITEM_HEIGHT, count, COLOR_HEADER);
+
+    int show_select =
+        strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
+        strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
+        strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0;
+    render_legend(fb, LEGEND_X_NONE, show_select, 1);
+
+    if (system_carousel_frame <= SYSTEM_CAROUSEL_FRAMES)
+        system_carousel_frame++;
 }
 
 static void handle_input(void) {
@@ -1874,33 +2106,47 @@ static void handle_input(void) {
         }
     }
 
-    if (input_repeat(FROG_BTN_UP) && selected_index > 0) {
-        selected_index--;
-        if (selected_index < scroll_offset) scroll_offset = selected_index;
-    }
-    if (input_repeat(FROG_BTN_DOWN) && selected_index < entry_count-1) {
-        selected_index++;
-        if (selected_index >= scroll_offset + VISIBLE_ENTRIES)
-            scroll_offset = selected_index - VISIBLE_ENTRIES + 1;
-    }
-    /* In the game switcher (one game on screen at a time), Left/Right step one
-     * game like Up/Down — no page jumping. */
-    bool switcher = viewing_recents && settings_game_switcher;
-    if (input_repeat(FROG_BTN_LEFT)) {
-        if (switcher) {
-            if (selected_index > 0) selected_index--;
-        } else {
-            selected_index = (selected_index >= VISIBLE_ENTRIES) ? selected_index - VISIBLE_ENTRIES : 0;
+    if (horizontal_system_view()) {
+        scroll_offset = 0;
+        if (input_repeat(FROG_BTN_LEFT) && entry_count > 0) {
+            selected_index = (selected_index + entry_count - 1) % entry_count;
+            system_carousel_start(-1);
+        }
+        if (input_repeat(FROG_BTN_RIGHT) && entry_count > 0) {
+            selected_index = (selected_index + 1) % entry_count;
+            system_carousel_start(1);
+        }
+    } else {
+        if (input_repeat(FROG_BTN_UP) && selected_index > 0) {
+            selected_index--;
             if (selected_index < scroll_offset) scroll_offset = selected_index;
         }
-    }
-    if (input_repeat(FROG_BTN_RIGHT)) {
-        if (switcher) {
-            if (selected_index < entry_count-1) selected_index++;
-        } else {
-            selected_index = (selected_index + VISIBLE_ENTRIES < entry_count) ? selected_index + VISIBLE_ENTRIES : entry_count - 1;
+        if (input_repeat(FROG_BTN_DOWN) && selected_index < entry_count-1) {
+            selected_index++;
             if (selected_index >= scroll_offset + VISIBLE_ENTRIES)
                 scroll_offset = selected_index - VISIBLE_ENTRIES + 1;
+        }
+        /* In the game switcher (one game on screen at a time), Left/Right step
+         * one game like Up/Down — no page jumping. */
+        bool switcher = viewing_recents && settings_game_switcher;
+        if (input_repeat(FROG_BTN_LEFT)) {
+            if (switcher) {
+                if (selected_index > 0) selected_index--;
+            } else {
+                selected_index = (selected_index >= VISIBLE_ENTRIES)
+                               ? selected_index - VISIBLE_ENTRIES : 0;
+                if (selected_index < scroll_offset) scroll_offset = selected_index;
+            }
+        }
+        if (input_repeat(FROG_BTN_RIGHT)) {
+            if (switcher) {
+                if (selected_index < entry_count-1) selected_index++;
+            } else {
+                selected_index = (selected_index + VISIBLE_ENTRIES < entry_count)
+                               ? selected_index + VISIBLE_ENTRIES : entry_count - 1;
+                if (selected_index >= scroll_offset + VISIBLE_ENTRIES)
+                    scroll_offset = selected_index - VISIBLE_ENTRIES + 1;
+            }
         }
     }
 
@@ -2165,6 +2411,20 @@ void retro_run(void) {
     }
     handle_input();
 
+    /* Entering the systems screen can also happen after a folder, Settings or
+     * Recents re-scan changed selected_index. Start that screen settled rather
+     * than carrying a half-finished offset from its previous visit. */
+    {
+        static bool carousel_view_last = false;
+        bool carousel_view_now = horizontal_system_view();
+        if (carousel_view_now && !carousel_view_last) {
+            system_carousel_frame = SYSTEM_CAROUSEL_FRAMES + 1;
+            system_carousel_start_offset = 0.0f;
+            system_carousel_visible_offset = 0.0f;
+        }
+        carousel_view_last = carousel_view_now;
+    }
+
     /* Re-assert brightness every frame for a short window after boot so
      * cubevol's delayed startup apply of its own (default) stored value is
      * overwritten within one frame instead of flashing visibly. */
@@ -2191,6 +2451,12 @@ void retro_run(void) {
                    selected_index >= 0 && selected_index < entry_count) {
             if (strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) == 0) {
                 banner_path = "settings";
+            } else if (strcmp(current_path, ROMS_PATH) == 0 &&
+                       strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) == 0) {
+                banner_path = "recents";
+            } else if (strcmp(current_path, ROMS_PATH) == 0 &&
+                       strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) == 0) {
+                banner_path = "favourites";
             } else if (entries[selected_index].is_dir && strcmp(current_path, ROMS_PATH) == 0) {
                 snprintf(sel_path, sizeof(sel_path), "%s/%s",
                          current_path, entries[selected_index].name);
@@ -2263,7 +2529,8 @@ void retro_run(void) {
             sig = sig*33u + (unsigned)(viewing_recents*4 + viewing_favourites*2 + viewing_search);
             for (const char *p = current_path; *p; p++) sig = sig*33u + (unsigned char)*p;
         }
-        redraw = first || sig != last_sig || banner_is_animating();
+        redraw = first || sig != last_sig || banner_is_animating() ||
+                 system_carousel_is_animating();
         last_sig = sig; first = 0;
     }
     if (!redraw) {
@@ -2304,6 +2571,9 @@ void retro_run(void) {
             banner_render(framebuffer);
         else
             render_clear_screen(framebuffer);
+        if (horizontal_system_view()) {
+            render_system_carousel(framebuffer);
+        } else {
         static char search_title[96];
         const char *title;
         if (viewing_search) {
@@ -2394,6 +2664,7 @@ void retro_run(void) {
         }
 
         render_legend(framebuffer, legend_mode, show_select, show_search);
+        }
     }
 
     if (video_cb)

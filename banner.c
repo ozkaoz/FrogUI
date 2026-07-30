@@ -9,6 +9,7 @@
 static uint16_t *banner_buf = NULL;   /* current (target) banner */
 static uint16_t *banner_prev = NULL;  /* outgoing banner during crossfade */
 static int banner_loaded = 0;
+static char banner_active_key[600] = "";
 static int banner_anim = 1;           /* crossfade enabled */
 #define FADE_FRAMES 20                /* ~330ms @ 60fps — slow, iPhone-like */
 static int fade_frame = FADE_FRAMES;  /* 0..FADE_FRAMES; FADE_FRAMES = done */
@@ -26,6 +27,14 @@ static inline uint16_t blend565(uint16_t a, uint16_t b, int t) {
     int g = (ag * it + bg * t) >> 8;
     int bl = (ab * it + bb * t) >> 8;
     return (uint16_t)((r << 11) | (g << 5) | bl);
+}
+
+static int fade_amount(void) {
+    float p = (float)fade_frame / (float)FADE_FRAMES;
+    if (p > 1.0f) p = 1.0f;
+    float e = p * p * (3.0f - 2.0f * p);
+    int t = (int)(e * 256.0f + 0.5f);
+    return t > 256 ? 256 : t;
 }
 
 void banner_set_anim(int enabled) {
@@ -57,8 +66,22 @@ static void bcache_store(const char *key, const uint16_t *src, int npix) {
 static void banner_snapshot_for_fade(int sw, int sh) {
     if (banner_anim && banner_loaded && banner_buf) {
         if (!banner_prev) banner_prev = malloc(sw * sh * sizeof(uint16_t));
-        if (banner_prev) { memcpy(banner_prev, banner_buf, sw * sh * sizeof(uint16_t)); fade_frame = 0; }
-        else fade_frame = FADE_FRAMES;
+        if (banner_prev) {
+            int npix = sw * sh;
+            /* A fast second input can arrive before the previous crossfade
+             * finishes. Snapshot the image actually on screen, not its target,
+             * so repeated carousel steps stay continuous instead of flashing. */
+            if (fade_frame < FADE_FRAMES) {
+                int t = fade_amount();
+                for (int i = 0; i < npix; i++)
+                    banner_prev[i] = blend565(banner_prev[i], banner_buf[i], t);
+            } else {
+                memcpy(banner_prev, banner_buf, (size_t)npix * sizeof(uint16_t));
+            }
+            fade_frame = 0;
+        } else {
+            fade_frame = FADE_FRAMES;
+        }
     } else {
         fade_frame = FADE_FRAMES;
     }
@@ -67,7 +90,13 @@ static void banner_snapshot_for_fade(int sw, int sh) {
 static void banner_load_common(const char *path, int mode, uint16_t bg) {
     int sw = SCREEN_WIDTH, sh = SCREEN_HEIGHT, npix = sw * sh;
     char key[600];
-    snprintf(key, sizeof key, "%s|%d", path, mode);
+    snprintf(key, sizeof key, "%s|%d|%u", path, mode, (unsigned)bg);
+
+    /* Several systems can fall back to the same main image. Do not start a
+     * pointless full-screen fade, or even memcpy, when the resolved art did
+     * not actually change. */
+    if (banner_loaded && strcmp(key, banner_active_key) == 0)
+        return;
 
     if (!banner_buf) banner_buf = malloc(npix * sizeof(uint16_t));
     if (!banner_buf) { banner_loaded = 0; return; }
@@ -78,6 +107,7 @@ static void banner_load_common(const char *path, int mode, uint16_t bg) {
         banner_snapshot_for_fade(sw, sh);
         memcpy(banner_buf, bcache[ci].buf, (size_t)npix * 2);
         banner_loaded = 1;
+        snprintf(banner_active_key, sizeof banner_active_key, "%s", key);
         return;
     }
 
@@ -131,6 +161,7 @@ static void banner_load_common(const char *path, int mode, uint16_t bg) {
 
     stbi_image_free(img);
     banner_loaded = 1;
+    snprintf(banner_active_key, sizeof banner_active_key, "%s", key);
     bcache_store(key, banner_buf, npix);   /* cache the transformed result */
 }
 
@@ -143,6 +174,7 @@ void banner_load_fit(const char *path, int mode, uint16_t bg) {
 
 void banner_clear(void) {
     banner_loaded = 0;
+    banner_active_key[0] = '\0';
     fade_frame = FADE_FRAMES;
 }
 
@@ -159,11 +191,7 @@ void banner_render(uint16_t *framebuffer) {
      * crossfade. p: 0..1 progress; e = 3p²−2p³. Only the background animates —
      * the selection/text is drawn separately and updates immediately. */
     fade_frame++;
-    float p = (float)fade_frame / (float)FADE_FRAMES;
-    if (p > 1.0f) p = 1.0f;
-    float e = p * p * (3.0f - 2.0f * p);
-    int t = (int)(e * 256.0f + 0.5f);
-    if (t > 256) t = 256;
+    int t = fade_amount();
 
     for (int i = 0; i < n; i++)
         framebuffer[i] = blend565(banner_prev[i], banner_buf[i], t);

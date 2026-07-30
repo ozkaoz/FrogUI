@@ -15,7 +15,7 @@ FrogUI is a libretro-based launcher that provides a simple, clean interface for 
 - **Ease of use, no additional scripts required, just drag and drop**: Simple installation and ROM management
 - **Hotkeys for Save State, Load and state index change**: Quick access to save states via hotkeys
 - **Thumbnails**: Display game preview images in RGB565 format
-- **Multiple themes**: Choose from various color schemes to customize your experience
+- **Multiple themes**: Choose a colour scheme and optionally use the animated horizontal system carousel
 - **Screenshots**: you can now take screenshots both in games and in the menu
 
 ## How It Works
