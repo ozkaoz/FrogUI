@@ -598,7 +598,9 @@ static int settings_filter_idx_on_enter = 0;  /* snapshot for restart-on-change 
 static int settings_quick_resume = 0;      /* boot straight into last game: 0=off, 1=on. Settings key stays "auto_resume" for upgrade compat. */
 static int settings_autosave_autoload = 0; /* auto-save on pause/quit + auto-load on any game launch (boot or manual pick): 0=off, 1=on */
 static int settings_anim = 1;           /* UI animations: 0=off, 1=on */
-static int settings_horizontal = 0;     /* horizontal system carousel: 0=off, 1=on */
+enum { STYLE_VERTICAL, STYLE_HORIZONTAL, STYLE_COUNT };
+static int settings_style = STYLE_VERTICAL;
+static int settings_friendly_names = 0; /* expand system folder codes in either style */
 static int settings_hide_empty = 1;     /* hide rom folders with no games: 0=off, 1=on */
 static int settings_hide_extensions = 1; /* hide file extensions in the browser: 0=off, 1=on */
 static int settings_backgrounds = 1;     /* show per-system background images: 0=off (solid theme bg), 1=on */
@@ -611,6 +613,8 @@ static int settings_disable_sleep = 1;  /* live-patch cubevol to disable power s
 static int settings_volume = 100;       /* global output volume 0..100 → cubegm/sndgain.txt */
 static const char *filter_names[] = {"nearest", "bilinear"};
 static const char *onoff_names[] = {"off", "on"};
+static const char *style_names[STYLE_COUNT] = {"Vertical", "Horizontal"};
+static const char *style_keys[STYLE_COUNT] = {"vertical", "horizontal"};
 #define FILTER_COUNT 2
 #define SETTINGS_BRIGHTNESS_STEP 5
 /* Filter option removed from the menu — always bilinear (HW path). */
@@ -619,7 +623,7 @@ static const char *onoff_names[] = {"off", "on"};
  * options. Adding, reordering, or grouping = just editing this table; the nav,
  * adjust, and render code all iterate it. TOGGLE/RANGE point at their int; THEME
  * and FONT are special (dynamic option lists); ACTION opens the remap wizard. */
-typedef enum { RT_HEADER, RT_TOGGLE, RT_RANGE, RT_THEME, RT_FONT, RT_WALLPAPER,
+typedef enum { RT_HEADER, RT_TOGGLE, RT_RANGE, RT_THEME, RT_STYLE, RT_FONT, RT_WALLPAPER,
                RT_WALLFIT, RT_CACHE_REBUILD, RT_ACTION } SRowType;
 typedef struct {
     SRowType type;
@@ -631,7 +635,8 @@ typedef struct {
 static const SRow settings_rows[] = {
     { RT_HEADER, "APPEARANCE" },
     { RT_THEME,  "Theme" },
-    { RT_TOGGLE, "Horizontal Layout", &settings_horizontal },
+    { RT_STYLE,  "Style" },
+    { RT_TOGGLE, "Friendly System Names", &settings_friendly_names },
     { RT_FONT,   "Font" },
     { RT_RANGE,  "Brightness", &settings_brightness, 0, 100, SETTINGS_BRIGHTNESS_STEP },
     { RT_TOGGLE, "Animations", &settings_anim },
@@ -681,6 +686,7 @@ static void settings_write_volume(void) {
 static void settings_apply(void) {
     extern const int theme_count;
     if (settings_theme_idx < 0 || settings_theme_idx >= theme_count) settings_theme_idx = 0;
+    if (settings_style < 0 || settings_style >= STYLE_COUNT) settings_style = STYLE_VERTICAL;
     if (settings_font_idx < 0 || settings_font_idx >= font_count) settings_font_idx = 0;
     if (settings_brightness < 0)   settings_brightness = 0;
     if (settings_brightness > 100) settings_brightness = 100;
@@ -743,7 +749,8 @@ static void settings_load_file(void) {
              * that layout choice while migrating back to the default colours. */
             if (strcmp(val, "Horizontal") == 0) {
                 settings_theme_idx = 0;
-                settings_horizontal = 1;
+                settings_style = STYLE_HORIZONTAL;
+                settings_friendly_names = 1;
             } else {
                 for (int i = 0; i < theme_count; i++)
                     if (strcmp(themes[i].name, val) == 0) { settings_theme_idx = i; break; }
@@ -768,8 +775,18 @@ static void settings_load_file(void) {
                 if (strcmp(filter_names[i], val) == 0) { settings_filter_idx = i; break; }
         } else if (strcmp(line, "animations") == 0) {
             settings_anim = (strcmp(val, "off") == 0) ? 0 : 1;
+        } else if (strcmp(line, "style") == 0) {
+            for (int i = 0; i < STYLE_COUNT; i++)
+                if (strcasecmp(val, style_keys[i]) == 0) { settings_style = i; break; }
         } else if (strcmp(line, "horizontal_layout") == 0) {
-            settings_horizontal = (strcmp(val, "on") == 0) ? 1 : 0;
+            /* Migrate the short-lived toggle form without changing how that
+             * user's carousel labels looked. */
+            settings_style = (strcmp(val, "on") == 0)
+                           ? STYLE_HORIZONTAL : STYLE_VERTICAL;
+            if (settings_style == STYLE_HORIZONTAL)
+                settings_friendly_names = 1;
+        } else if (strcmp(line, "friendly_system_names") == 0) {
+            settings_friendly_names = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "auto_resume") == 0) {
             settings_quick_resume = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "autosave_autoload") == 0) {
@@ -816,7 +833,8 @@ static void settings_save_file(void) {
     fprintf(f, "auto_resume=%s\n", onoff_names[settings_quick_resume]);
     fprintf(f, "autosave_autoload=%s\n", onoff_names[settings_autosave_autoload]);
     fprintf(f, "animations=%s\n", onoff_names[settings_anim]);
-    fprintf(f, "horizontal_layout=%s\n", onoff_names[settings_horizontal]);
+    fprintf(f, "style=%s\n", style_keys[settings_style]);
+    fprintf(f, "friendly_system_names=%s\n", onoff_names[settings_friendly_names]);
     fprintf(f, "hide_empty=%s\n", onoff_names[settings_hide_empty]);
     fprintf(f, "hide_extensions=%s\n", onoff_names[settings_hide_extensions]);
     fprintf(f, "backgrounds=%s\n", onoff_names[settings_backgrounds]);
@@ -924,6 +942,7 @@ static const char *system_display_name(const char *folder) {
     if (strcmp(folder, SETTINGS_ENTRY_NAME) == 0) return "Settings";
     if (strcmp(folder, RECENTS_ENTRY_NAME) == 0) return "Recent Games";
     if (strcmp(folder, FAVOURITES_ENTRY_NAME) == 0) return "Favourites";
+    if (!settings_friendly_names) return folder;
     for (size_t i = 0; i < sizeof(system_labels) / sizeof(system_labels[0]); i++)
         if (strcasecmp(folder, system_labels[i].folder) == 0)
             return system_labels[i].label;
@@ -1305,8 +1324,10 @@ static void switcher_blit565(uint16_t *fb, const uint16_t *src, const uint8_t *a
 static void render_game_switcher(uint16_t *framebuffer) {
     const RecentGame *list = recent_games_get_list();
     int n = recent_games_get_count();
+    int barh = UI_S(30);
     if (n <= 0) {
-        render_header(framebuffer, "RECENT GAMES");
+        render_fill_rect(framebuffer, 0, 0, SCREEN_WIDTH, barh, COLOR_BG);
+        render_header(framebuffer, "GameSwitcher");
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, SCREEN_HEIGHT/2,
                        "No recent games yet", COLOR_TEXT);
         render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
@@ -1316,9 +1337,8 @@ static void render_game_switcher(uint16_t *framebuffer) {
     if (selected_index >= n) selected_index = n - 1;
     const RecentGame *g = &list[selected_index];
 
-    /* Art fills the whole screen above the bottom info bar (no header, no legend
-     * — they just shrink the art). */
-    int barh = UI_S(30);
+    /* Art fills the screen above the bottom info bar. A matching themed header
+     * is overlaid afterward, so it does not change the screenshot geometry. */
     int bx = 0, by = 0;
     int bw = SCREEN_WIDTH, bh = SCREEN_HEIGHT - barh;
     render_fill_rect(framebuffer, bx, by, bw, bh, 0x0000);
@@ -1357,7 +1377,7 @@ static void render_game_switcher(uint16_t *framebuffer) {
 
     /* Bottom info bar: game name (left) + position / play time (right). */
     int byb = SCREEN_HEIGHT - barh;
-    render_fill_rect(framebuffer, 0, byb, SCREEN_WIDTH, barh, 0x2104);
+    render_fill_rect(framebuffer, 0, byb, SCREEN_WIDTH, barh, COLOR_BG);
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, byb + UI_S(8),
                    g->game_name, COLOR_TEXT);
     char info[96];
@@ -1373,6 +1393,8 @@ static void render_game_switcher(uint16_t *framebuffer) {
     int iw = (int)strlen(info) * UI_S(8);
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH - iw - PADDING, byb + UI_S(8),
                    info, COLOR_TEXT);
+    render_fill_rect(framebuffer, 0, 0, SCREEN_WIDTH, barh, COLOR_BG);
+    render_header(framebuffer, "GameSwitcher");
 }
 
 /* Box-art side panel (Onion/muOS-style): right portion of the list view shows
@@ -1764,6 +1786,9 @@ static void handle_settings_menu(void) {
         case RT_THEME:
             settings_theme_idx = (settings_theme_idx + delta + theme_count) % theme_count;
             break;
+        case RT_STYLE:
+            settings_style = (settings_style + delta + STYLE_COUNT) % STYLE_COUNT;
+            break;
         case RT_FONT:
             if (font_count > 0)
                 settings_font_idx = (settings_font_idx + delta + font_count) % font_count;
@@ -1822,7 +1847,7 @@ static void handle_settings_menu(void) {
 }
 
 static bool horizontal_system_view(void) {
-    return settings_horizontal &&
+    return settings_style == STYLE_HORIZONTAL &&
            strcmp(current_path, ROMS_PATH) == 0 &&
            !viewing_recents && !viewing_favourites && !viewing_search;
 }
@@ -2302,6 +2327,7 @@ static void render_settings_menu(void) {
         }
         switch (r->type) {
         case RT_THEME:  snprintf(line, sizeof line, "%s: < %s >", r->label, themes[settings_theme_idx].name); break;
+        case RT_STYLE:  snprintf(line, sizeof line, "%s: < %s >", r->label, style_names[settings_style]); break;
         case RT_FONT:   snprintf(line, sizeof line, "%s: < %s >", r->label, font_count > 0 ? font_disp[settings_font_idx] : "(none)"); break;
         case RT_WALLPAPER: snprintf(line, sizeof line, "%s: < %s >", r->label, wallpaper_disp[settings_wallpaper_idx]); break;
         case RT_WALLFIT:   snprintf(line, sizeof line, "%s: < %s >", r->label, wallpaper_fit_names[settings_wallpaper_fit]); break;
@@ -2517,6 +2543,7 @@ void retro_run(void) {
         if (settings_menu_active) {
             sig = sig*33u + (unsigned)settings_menu_idx;
             sig = sig*33u + (unsigned)settings_theme_idx;
+            sig = sig*33u + (unsigned)settings_style;
             sig = sig*33u + (unsigned)settings_font_idx;
             sig = sig*33u + (unsigned)settings_wallpaper_idx;
             sig = sig*33u + (unsigned)settings_wallpaper_fit;
@@ -2534,11 +2561,9 @@ void retro_run(void) {
         last_sig = sig; first = 0;
     }
     if (!redraw) {
-        /* The recents carousel intentionally has no header, so its boot path
-         * used to skip frogui_battery_pct() and never clear cubevol's old
-         * top-right glyph. Keep that zone hidden in every view, including
-         * after a later cubevol charge-status repaint. At the ~1 ms idle-loop
-         * cadence this is about 10 clears/sec, while the mmap itself is cached. */
+        /* Keep cubevol's old top-right glyph hidden after any delayed
+         * charge-status repaint. At the ~1 ms idle-loop cadence this is about
+         * 10 clears/sec, while the mmap itself is cached. */
         static unsigned fb1_idle_ticks = 0;
         if (++fb1_idle_ticks >= 100) {
             fb1_idle_ticks = 0;
@@ -2583,7 +2608,7 @@ void retro_run(void) {
             title = viewing_recents    ? "RECENT GAMES" :
                     viewing_favourites ? "FAVOURITES" :
                     (strcmp(current_path, ROMS_PATH) == 0)
-                    ? "TREEFROGUI: SYSTEMS" : get_basename(current_path);
+                    ? "TREEFROGUI: SYSTEMS" : system_display_name(get_basename(current_path));
         }
         render_header(framebuffer, title);
         {
@@ -2592,6 +2617,8 @@ void retro_run(void) {
                 int idx = scroll_offset + i;
                 const char *shown = entries[idx].name;
                 char disp[256];
+                if (entries[idx].is_dir && strcmp(current_path, ROMS_PATH) == 0)
+                    shown = system_display_name(entries[idx].name);
                 /* Hide file extension (.gb/.gba/...) when enabled — display only,
                  * the real name in entries[] is still used to launch. Files only. */
                 if (settings_hide_extensions && !entries[idx].is_dir) {
