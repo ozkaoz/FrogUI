@@ -1225,13 +1225,17 @@ static void render_game_switcher(uint16_t *framebuffer) {
     if (!drawn && switcher_savestate_bmp(g->full_path, path, sizeof path)) {
         int w, h, ch; unsigned char *img = stbi_load(path, &w, &h, &ch, 3);
         if (img) {
-            int dw = bw, dh = h * bw / w; if (dh > bh) { dh = bh; dw = w * bh / h; }
-            int ox = bx + (bw - dw) / 2, oy = by + (bh - dh) / 2;
-            for (int y = 0; y < dh; y++) {
-                const unsigned char *rr = img + (size_t)(y * h / dh) * w * 3;
-                uint16_t *d = framebuffer + (size_t)(oy + y) * SCREEN_WIDTH + ox;
-                for (int x = 0; x < dw; x++) {
-                    const unsigned char *p = rr + (size_t)(x * w / dw) * 3;
+            /* Gameplay captures use the core's raw pixel geometry. PS1 in
+             * particular can produce 256/320/368/512/640-wide modes whose
+             * pixels are meant to be stretched by the display, not shown
+             * square. Fill the switcher viewport just like live gameplay;
+             * aspect-preserving fit made 640x240 captures look squashed into
+             * a wide strip. Box art still uses switcher_blit565() above. */
+            for (int y = 0; y < bh; y++) {
+                const unsigned char *rr = img + (size_t)(y * h / bh) * w * 3;
+                uint16_t *d = framebuffer + (size_t)(by + y) * SCREEN_WIDTH + bx;
+                for (int x = 0; x < bw; x++) {
+                    const unsigned char *p = rr + (size_t)(x * w / bw) * 3;
                     d[x] = ((p[0] & 0xF8) << 8) | ((p[1] & 0xFC) << 3) | (p[2] >> 3);
                 }
             }
