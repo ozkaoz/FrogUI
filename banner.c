@@ -166,7 +166,10 @@ static void banner_load_common(const char *path, int mode, uint16_t bg) {
 }
 
 void banner_load(const char *path) {
-    banner_load_common(path, BANNER_FIT_STRETCH, 0);   /* system art: stretch, as before */
+    /* System artwork comes from mixed-aspect-ratio theme resources. Preserve
+     * the composition and crop the excess instead of stretching consoles and
+     * artwork into the panel's aspect ratio. */
+    banner_load_common(path, BANNER_FIT_FILL, COLOR_BG);
 }
 void banner_load_fit(const char *path, int mode, uint16_t bg) {
     banner_load_common(path, mode, bg);
