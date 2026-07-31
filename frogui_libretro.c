@@ -352,6 +352,7 @@ static uint16_t *framebuffer = NULL;
 static bool shutdown_requested = false;
 static bool viewing_recents = false;
 static bool viewing_favourites = false;
+static bool game_switcher_fullscreen = false;
 #define SYSTEM_CAROUSEL_FRAMES 12
 static int system_carousel_frame = SYSTEM_CAROUSEL_FRAMES + 1;
 static float system_carousel_start_offset = 0.0f;
@@ -1344,10 +1345,10 @@ static void render_game_switcher(uint16_t *framebuffer) {
     if (selected_index >= n) selected_index = n - 1;
     const RecentGame *g = &list[selected_index];
 
-    /* Art fills the screen above the bottom info bar. A matching themed header
-     * is overlaid afterward, so it does not change the screenshot geometry. */
+    /* Onion-style: keep the capture at full panel geometry in both modes and
+     * paint UI on top. Resizing around the bars distorts gameplay captures. */
     int bx = 0, by = 0;
-    int bw = SCREEN_WIDTH, bh = SCREEN_HEIGHT - barh;
+    int bw = SCREEN_WIDTH, bh = SCREEN_HEIGHT;
     render_fill_rect(framebuffer, bx, by, bw, bh, 0x0000);
 
     int drawn = 0;
@@ -1382,25 +1383,41 @@ static void render_game_switcher(uint16_t *framebuffer) {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, bx + UI_S(16), by + bh/2,
                        "(no screenshot - open the in-game menu once)", COLOR_TEXT);
 
-    /* Bottom info bar: game name (left) + position / play time (right). */
+    /* Bottom overlay: detailed mode carries play info; fullscreen keeps only
+     * the selected game and navigation, matching Onion's minimal view. */
     int byb = SCREEN_HEIGHT - barh;
     render_fill_rect(framebuffer, 0, byb, SCREEN_WIDTH, barh, COLOR_SELECT_BG);
-    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, byb + UI_S(8),
-                   g->game_name, COLOR_SELECT_TEXT);
-    char info[96];
-    long secs = playtime_lookup(g->full_path);
-    if (secs >= 3600)
-        snprintf(info, sizeof info, "Played %ldh %ldm   %d/%d", secs/3600, (secs%3600)/60, selected_index + 1, n);
-    else if (secs >= 60)
-        snprintf(info, sizeof info, "Played %ldm   %d/%d", secs/60, selected_index + 1, n);
-    else if (secs > 0)
-        snprintf(info, sizeof info, "Played %lds   %d/%d", secs, selected_index + 1, n);
-    else
-        snprintf(info, sizeof info, "%d/%d", selected_index + 1, n);
-    int iw = (int)strlen(info) * UI_S(8);
-    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH - iw - PADDING, byb + UI_S(8),
-                   info, COLOR_SELECT_TEXT);
-    render_game_switcher_header(framebuffer, barh);
+    if (game_switcher_fullscreen) {
+        int nw = font_measure_text(g->game_name);
+        int nx = (SCREEN_WIDTH - nw) / 2;
+        if (selected_index > 0)
+            font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING,
+                           byb + UI_S(8), "<", COLOR_SELECT_TEXT);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, nx,
+                       byb + UI_S(8), g->game_name, COLOR_SELECT_TEXT);
+        if (selected_index + 1 < n)
+            font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT,
+                           SCREEN_WIDTH - PADDING - font_measure_text(">"),
+                           byb + UI_S(8), ">", COLOR_SELECT_TEXT);
+    } else {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING,
+                       byb + UI_S(8), g->game_name, COLOR_SELECT_TEXT);
+        char info[96];
+        long secs = playtime_lookup(g->full_path);
+        if (secs >= 3600)
+            snprintf(info, sizeof info, "Played %ldh %ldm   %d/%d", secs/3600, (secs%3600)/60, selected_index + 1, n);
+        else if (secs >= 60)
+            snprintf(info, sizeof info, "Played %ldm   %d/%d", secs/60, selected_index + 1, n);
+        else if (secs > 0)
+            snprintf(info, sizeof info, "Played %lds   %d/%d", secs, selected_index + 1, n);
+        else
+            snprintf(info, sizeof info, "%d/%d", selected_index + 1, n);
+        int iw = font_measure_text(info);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT,
+                       SCREEN_WIDTH - iw - PADDING, byb + UI_S(8),
+                       info, COLOR_SELECT_TEXT);
+        render_game_switcher_header(framebuffer, barh);
+    }
 }
 
 /* Box-art side panel (Onion/muOS-style): right portion of the list view shows
@@ -1466,6 +1483,7 @@ static void enter_recents_view(void) {
         entry_count++;
     }
     viewing_recents = true;
+    game_switcher_fullscreen = false;
     selected_index = 0; scroll_offset = 0;
 }
 
@@ -2025,7 +2043,12 @@ static void handle_input(void) {
         return;
     }
 
-    /* Y: toggle favourite for current ROM, or remove from favourites view */
+    /* Y: Onion-style detailed/fullscreen toggle in GameSwitcher. Elsewhere it
+     * keeps the existing favourite action. */
+    if (input_was_pressed(FROG_BTN_Y) && viewing_recents && settings_game_switcher) {
+        game_switcher_fullscreen = !game_switcher_fullscreen;
+        goto input_done;
+    }
     if (input_was_pressed(FROG_BTN_Y) && selected_index < entry_count) {
         if (viewing_favourites) {
             /* Remove selected favourite */
@@ -2560,6 +2583,7 @@ void retro_run(void) {
             sig = sig*33u + (unsigned)selected_index;
             sig = sig*33u + (unsigned)scroll_offset;
             sig = sig*33u + (unsigned)(viewing_recents*4 + viewing_favourites*2 + viewing_search);
+            sig = sig*33u + (unsigned)game_switcher_fullscreen;
             for (const char *p = current_path; *p; p++) sig = sig*33u + (unsigned char)*p;
         }
         redraw = first || sig != last_sig || banner_is_animating() ||
