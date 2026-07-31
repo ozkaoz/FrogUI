@@ -386,6 +386,18 @@ const Theme themes[] = {
         .legend = RGB565(221, 193, 255),
         .legend_bg = RGB565(53, 43, 70),
         .disabled = RGB565(150, 137, 171)
+    },
+    {
+        .name = "Canvas Pastel",
+        .bg = RGB565(187, 187, 187),
+        .text = RGB565(119, 119, 119),
+        .select_bg = RGB565(167, 199, 231),
+        .select_text = RGB565(255, 255, 255),
+        .header = RGB565(167, 199, 231),
+        .folder = RGB565(119, 119, 119),
+        .legend = RGB565(119, 119, 119),
+        .legend_bg = RGB565(255, 255, 255),
+        .disabled = RGB565(160, 160, 160)
     }
 };
 
