@@ -457,15 +457,10 @@ static void fb1_clear_battery_zone(void) {
  * clears cubevol's battery corner each call so its glyph stays hidden. Called by
  * render_header (every screen, every frame). */
 static int raw_to_pct(int raw) {
-    /* The ADC tops out around 224 on a charged pack. The old curve reserved
-     * 100% for the byte maximum (255), so real hardware could never display a
-     * full battery. Keep the measured low/mid points and plateau at 224. */
-    /* R36SX's ADC tops out around 180 when full; SF-class units reach ~224. */
-    static const int rx[] = { 64, 153, 180 };
-    static const int py[] = {  0,  50, 100 };
-    if (raw <= rx[0]) return 0;
-    for (int i = 1; i < 3; i++) if (raw <= rx[i]) {
-        int sp = rx[i]-rx[i-1]; return py[i-1] + (py[i]-py[i-1])*(raw-rx[i-1])/(sp?sp:1); }
+    /* This ADC is too noisy and device-dependent for a truthful percentage.
+     * Use three broad states; give the full state a deliberately wide range. */
+    if (raw < 100) return 25;
+    if (raw < 145) return 50;
     return 100;
 }
 /* Persistent ADC fds, opened O_RDWR ONCE like cubevol (battery_adc_init) - these
