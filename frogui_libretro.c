@@ -732,7 +732,7 @@ static const SRow settings_rows[] = {
     { RT_TOGGLE, "Background Images", &settings_backgrounds },
     { RT_THEME_PACK, "Background Theme Pack" },
     { RT_WALLPAPER, "Wallpaper" },
-    { RT_WALLFIT, "Wallpaper Fit" },
+    { RT_WALLFIT, "Background Image Fit" },
     { RT_TOGGLE, "Hide Extensions", &settings_hide_extensions },
     { RT_TOGGLE, "Hide Empty Folders", &settings_hide_empty },
     { RT_HEADER, "LIBRARY" },
