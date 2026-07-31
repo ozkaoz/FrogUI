@@ -539,6 +539,41 @@ static int  settings_wallpaper_fit = 0;  /* BANNER_FIT_* (Fill/Fit/Stretch/Cente
 static const char *wallpaper_fit_names[] = { "Fill", "Fit", "Stretch", "Center", "Tile" };
 #define WALL_FIT_N 5
 
+/* Optional background packs. Pack 0 is the shipped, flat frogui/ artwork;
+ * additional packs live in frogui/theme-packs/<folder>/. Each pack contains
+ * the same per-screen filenames (main.jpg, ps.jpg, settings.jpg, ...). */
+#define MAX_THEME_PACKS 32
+static char theme_pack_files[MAX_THEME_PACKS][FONT_STR_MAX];
+static char theme_pack_disp[MAX_THEME_PACKS][FONT_STR_MAX];
+static int theme_pack_count = 1;
+static int settings_theme_pack_idx = 0;
+
+static void theme_pack_scan(void) {
+    theme_pack_count = 1;
+    strcpy(theme_pack_files[0], "");
+    strcpy(theme_pack_disp[0], "Default");
+    DIR *dp = opendir("/mnt/sdcard/frogui/theme-packs");
+    if (!dp) return;
+    struct dirent *e;
+    while ((e = readdir(dp)) && theme_pack_count < MAX_THEME_PACKS) {
+        if (e->d_name[0] == '.' || e->d_type == DT_REG) continue;
+        int dup = 0;
+        for (int i = 1; i < theme_pack_count; i++)
+            if (strcasecmp(theme_pack_files[i], e->d_name) == 0) { dup = 1; break; }
+        if (dup) continue;
+        strncpy(theme_pack_files[theme_pack_count], e->d_name, FONT_STR_MAX - 1);
+        theme_pack_files[theme_pack_count][FONT_STR_MAX - 1] = '\0';
+        strncpy(theme_pack_disp[theme_pack_count], e->d_name, FONT_STR_MAX - 1);
+        theme_pack_disp[theme_pack_count][FONT_STR_MAX - 1] = '\0';
+        for (char *p = theme_pack_disp[theme_pack_count]; *p; p++)
+            if (*p == '_' || *p == '-') *p = ' ';
+        theme_pack_count++;
+    }
+    closedir(dp);
+    if (settings_theme_pack_idx < 0 || settings_theme_pack_idx >= theme_pack_count)
+        settings_theme_pack_idx = 0;
+}
+
 static int wall_has_ext(const char *n) {
     const char *d = strrchr(n, '.');
     return d && (strcasecmp(d, ".png") == 0 || strcasecmp(d, ".jpg") == 0 ||
@@ -657,7 +692,7 @@ static const char *style_keys[STYLE_COUNT] = {"vertical", "horizontal"};
  * adjust, and render code all iterate it. TOGGLE/RANGE point at their int; THEME
  * and FONT are special (dynamic option lists); ACTION opens the remap wizard. */
 typedef enum { RT_HEADER, RT_TOGGLE, RT_RANGE, RT_THEME, RT_STYLE, RT_FONT, RT_WALLPAPER,
-               RT_WALLFIT, RT_CACHE_REBUILD, RT_ACTION } SRowType;
+               RT_WALLFIT, RT_THEME_PACK, RT_CACHE_REBUILD, RT_ACTION } SRowType;
 typedef struct {
     SRowType type;
     const char *label;
@@ -676,6 +711,7 @@ static const SRow settings_rows[] = {
     { RT_TOGGLE, "Animations", &settings_anim },
     { RT_TOGGLE, "Battery Colour Mode", &settings_battery_color },
     { RT_TOGGLE, "Background Images", &settings_backgrounds },
+    { RT_THEME_PACK, "Background Theme Pack" },
     { RT_WALLPAPER, "Wallpaper" },
     { RT_WALLFIT, "Wallpaper Fit" },
     { RT_TOGGLE, "Hide Extensions", &settings_hide_extensions },
@@ -800,6 +836,10 @@ static void settings_load_file(void) {
         } else if (strcmp(line, "wallpaper_fit") == 0) {
             for (int i = 0; i < WALL_FIT_N; i++)
                 if (strcasecmp(wallpaper_fit_names[i], val) == 0) { settings_wallpaper_fit = i; break; }
+        } else if (strcmp(line, "theme_pack") == 0) {
+            for (int i = 0; i < theme_pack_count; i++)
+                if (strcasecmp(theme_pack_files[i], val) == 0 ||
+                    strcasecmp(theme_pack_disp[i], val) == 0) { settings_theme_pack_idx = i; break; }
         } else if (strcmp(line, "brightness") == 0) {
             settings_brightness = atoi(val);
         } else if (strcmp(line, "volume") == 0) {
@@ -863,6 +903,8 @@ static void settings_save_file(void) {
             (settings_wallpaper_idx > 0 && settings_wallpaper_idx < wallpaper_count)
             ? wallpaper_files[settings_wallpaper_idx] : "none");
     fprintf(f, "wallpaper_fit=%s\n", wallpaper_fit_names[settings_wallpaper_fit]);
+    fprintf(f, "theme_pack=%s\n", settings_theme_pack_idx > 0 ?
+            theme_pack_files[settings_theme_pack_idx] : "default");
     fprintf(f, "brightness=%d\n", settings_brightness);
     fprintf(f, "volume=%d\n", settings_volume);
     fprintf(f, "filter=%s\n", filter_names[settings_filter_idx]);
@@ -999,15 +1041,21 @@ static void load_banner_for_view(const char *path, bool is_recents, bool is_favo
         if (access(wp, R_OK) == 0) { banner_load_fit(wp, settings_wallpaper_fit, COLOR_BG); return; }
     }
     char img[512];
+    char banner_dir[512];
+    if (settings_theme_pack_idx > 0 && settings_theme_pack_idx < theme_pack_count)
+        snprintf(banner_dir, sizeof banner_dir, BANNER_DIR "/theme-packs/%s",
+                 theme_pack_files[settings_theme_pack_idx]);
+    else
+        snprintf(banner_dir, sizeof banner_dir, "%s", BANNER_DIR);
     const char *exts[] = { "png", "jpg", "jpeg", "bmp", NULL };
     if (is_recents) {
         for (int i = 0; exts[i]; i++) {
-            snprintf(img, sizeof(img), BANNER_DIR "/recents.%s", exts[i]);
+            snprintf(img, sizeof(img), "%s/recents.%s", banner_dir, exts[i]);
             if (access(img, R_OK) == 0) { banner_load(img); return; }
         }
     } else if (is_favourites) {
         for (int i = 0; exts[i]; i++) {
-            snprintf(img, sizeof(img), BANNER_DIR "/favourites.%s", exts[i]);
+            snprintf(img, sizeof(img), "%s/favourites.%s", banner_dir, exts[i]);
             if (access(img, R_OK) == 0) { banner_load(img); return; }
         }
     } else {
@@ -1015,12 +1063,12 @@ static void load_banner_for_view(const char *path, bool is_recents, bool is_favo
         const char *name = base ? base + 1 : (path ? path : "main");
         if (!name || !*name) name = "main";
         for (int i = 0; exts[i]; i++) {
-            snprintf(img, sizeof(img), BANNER_DIR "/%s.%s", name, exts[i]);
+            snprintf(img, sizeof(img), "%s/%s.%s", banner_dir, name, exts[i]);
             if (access(img, R_OK) == 0) { banner_load(img); return; }
         }
         /* Fallback: try main.png for any view that has no folder-specific image */
         for (int i = 0; exts[i]; i++) {
-            snprintf(img, sizeof(img), BANNER_DIR "/main.%s", exts[i]);
+            snprintf(img, sizeof(img), "%s/main.%s", banner_dir, exts[i]);
             if (access(img, R_OK) == 0) { banner_load(img); return; }
         }
     }
@@ -1860,6 +1908,9 @@ static void handle_settings_menu(void) {
         case RT_WALLFIT:
             settings_wallpaper_fit = (settings_wallpaper_fit + delta + WALL_FIT_N) % WALL_FIT_N;
             break;
+        case RT_THEME_PACK:
+            settings_theme_pack_idx = (settings_theme_pack_idx + delta + theme_pack_count) % theme_pack_count;
+            break;
         case RT_TOGGLE:
             *r->val = (*r->val + delta + 2) % 2;
             break;
@@ -2321,6 +2372,8 @@ void retro_init(void) {
     dbg("font_scan done");
     wallpaper_scan();
     dbg("wallpaper_scan done");
+    theme_pack_scan();
+    dbg("theme_pack_scan done");
     theme_init();
     dbg("theme_init done");
     settings_load_file();
@@ -2413,6 +2466,7 @@ static void render_settings_menu(void) {
         case RT_FONT:   snprintf(line, sizeof line, "%s: < %s >", r->label, font_count > 0 ? font_disp[settings_font_idx] : "(none)"); break;
         case RT_WALLPAPER: snprintf(line, sizeof line, "%s: < %s >", r->label, wallpaper_disp[settings_wallpaper_idx]); break;
         case RT_WALLFIT:   snprintf(line, sizeof line, "%s: < %s >", r->label, wallpaper_fit_names[settings_wallpaper_fit]); break;
+        case RT_THEME_PACK: snprintf(line, sizeof line, "%s: < %s >", r->label, theme_pack_disp[settings_theme_pack_idx]); break;
         case RT_TOGGLE: snprintf(line, sizeof line, "%s: < %s >", r->label, onoff_names[*r->val]); break;
         case RT_RANGE:  snprintf(line, sizeof line, "%s: < %d%% >", r->label, *r->val); break;
         default:        snprintf(line, sizeof line, "%s", r->label); break;   /* RT_ACTION */
@@ -2550,6 +2604,7 @@ void retro_run(void) {
     static int  banner_last_bg = -1;    /* reload when the backgrounds toggle flips */
     static int  banner_last_wp = -1;    /* reload when the wallpaper choice changes */
     static int  banner_last_wpfit = -1; /* reload when the wallpaper fit mode changes */
+    static int  banner_last_pack = -1;  /* reload when the background pack changes */
     {
         const char *banner_path = current_path;
         char sel_path[MAX_PATH_LEN];
@@ -2586,6 +2641,7 @@ void retro_run(void) {
         if (wp_active) {
             need_reload = (settings_wallpaper_idx != banner_last_wp ||
                            settings_wallpaper_fit != banner_last_wpfit ||
+                           settings_theme_pack_idx != banner_last_pack ||
                            settings_backgrounds  != banner_last_bg);
         } else {
             need_reload = (viewing_recents != banner_last_recents ||
@@ -2593,7 +2649,8 @@ void retro_run(void) {
                            strcmp(banner_path, banner_last_path) != 0 ||
                            settings_backgrounds != banner_last_bg ||
                            settings_wallpaper_idx != banner_last_wp ||
-                           settings_wallpaper_fit != banner_last_wpfit);
+                           settings_wallpaper_fit != banner_last_wpfit ||
+                           settings_theme_pack_idx != banner_last_pack);
         }
         if (need_reload) {
             load_banner_for_view(banner_path, viewing_recents, viewing_favourites);
@@ -2603,6 +2660,7 @@ void retro_run(void) {
             banner_last_bg = settings_backgrounds;
             banner_last_wp = settings_wallpaper_idx;
             banner_last_wpfit = settings_wallpaper_fit;
+            banner_last_pack = settings_theme_pack_idx;
             strncpy(banner_last_path, banner_path, MAX_PATH_LEN - 1);
             banner_last_path[MAX_PATH_LEN - 1] = '\0';
         }
