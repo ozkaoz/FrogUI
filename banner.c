@@ -200,6 +200,30 @@ void banner_render(uint16_t *framebuffer) {
         framebuffer[i] = blend565(banner_prev[i], banner_buf[i], t);
 }
 
+void banner_draw_card(uint16_t *framebuffer, int x, int y, int w, int h) {
+    if (!banner_loaded || !banner_buf || !framebuffer || w <= 2 || h <= 2) return;
+    if (x < 0 || y < 0 || x + w > SCREEN_WIDTH || y + h > SCREEN_HEIGHT) return;
+    for (int yy = 0; yy < h; yy++) {
+        int sy = (int)((long)yy * SCREEN_HEIGHT / h);
+        for (int xx = 0; xx < w; xx++) {
+            int sx = (int)((long)xx * SCREEN_WIDTH / w);
+            framebuffer[(y + yy) * SCREEN_WIDTH + (x + xx)] =
+                banner_buf[sy * SCREEN_WIDTH + sx];
+        }
+    }
+    /* Thin rounded-card outline. The fill remains the real artwork; the
+     * outline is deliberately subtle so the system name stays primary. */
+    uint16_t edge = COLOR_HEADER;
+    for (int xx = x + 3; xx < x + w - 3; xx++) {
+        framebuffer[y * SCREEN_WIDTH + xx] = edge;
+        framebuffer[(y + h - 1) * SCREEN_WIDTH + xx] = edge;
+    }
+    for (int yy = y + 3; yy < y + h - 3; yy++) {
+        framebuffer[yy * SCREEN_WIDTH + x] = edge;
+        framebuffer[yy * SCREEN_WIDTH + x + w - 1] = edge;
+    }
+}
+
 int banner_is_loaded(void) {
     return banner_loaded;
 }
