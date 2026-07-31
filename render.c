@@ -279,6 +279,25 @@ void render_menu_item(uint16_t *framebuffer, int index, const char *name, int is
                     START_Y + visible_index * ITEM_HEIGHT);
 }
 
+void render_menu_item_centered(uint16_t *framebuffer, int index, const char *name,
+                               int is_dir, int is_selected, int scroll_offset) {
+    if (!framebuffer || !name) return;
+
+    int visible_index = index - scroll_offset;
+    if (visible_index < 0 || visible_index >= VISIBLE_ENTRIES) return;
+
+    int y = START_Y + visible_index * ITEM_HEIGHT;
+    int text_x = (SCREEN_WIDTH - font_measure_text(name)) / 2;
+    if (text_x < PADDING) text_x = PADDING;
+    if (is_selected) {
+        render_text_pillbox(framebuffer, text_x, y, name,
+                            COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    } else {
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, text_x, y, name,
+                       is_dir ? COLOR_FOLDER : COLOR_TEXT);
+    }
+}
+
 // Thumbnail implementation
 
 void get_thumbnail_path(const char *game_path, char *thumb_path, size_t thumb_path_size) {

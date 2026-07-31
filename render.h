@@ -93,6 +93,9 @@ void render_legend(uint16_t *framebuffer, int x_button_mode, int show_select, in
 // Draw a menu item (file or folder)
 void render_menu_item(uint16_t *framebuffer, int index, const char *name, int is_dir,
                      int is_selected, int scroll_offset, int is_favorited);
+/* Draw a vertical-list item with its label centered on the screen. */
+void render_menu_item_centered(uint16_t *framebuffer, int index, const char *name,
+                               int is_dir, int is_selected, int scroll_offset);
 // Draw a row at an explicit pixel y (animated list)
 void render_menu_row(uint16_t *framebuffer, const char *name, int is_dir,
                      int is_selected, int is_favorited, int y);

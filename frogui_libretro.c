@@ -632,6 +632,7 @@ static int settings_autosave_autoload = 0; /* auto-save on pause/quit + auto-loa
 static int settings_anim = 1;           /* UI animations: 0=off, 1=on */
 enum { STYLE_VERTICAL, STYLE_HORIZONTAL, STYLE_COUNT };
 static int settings_style = STYLE_VERTICAL;
+static int settings_center_text = 0;   /* center labels in the vertical system list */
 static int settings_friendly_names = 0; /* expand system folder codes in either style */
 static int settings_hide_empty = 1;     /* hide rom folders with no games: 0=off, 1=on */
 static int settings_hide_extensions = 1; /* hide file extensions in the browser: 0=off, 1=on */
@@ -668,6 +669,7 @@ static const SRow settings_rows[] = {
     { RT_HEADER, "APPEARANCE" },
     { RT_THEME,  "Theme" },
     { RT_STYLE,  "Style" },
+    { RT_TOGGLE, "Center Text", &settings_center_text },
     { RT_TOGGLE, "Friendly System Names", &settings_friendly_names },
     { RT_FONT,   "Font" },
     { RT_RANGE,  "Brightness", &settings_brightness, 0, 100, SETTINGS_BRIGHTNESS_STEP },
@@ -810,6 +812,8 @@ static void settings_load_file(void) {
         } else if (strcmp(line, "style") == 0) {
             for (int i = 0; i < STYLE_COUNT; i++)
                 if (strcasecmp(val, style_keys[i]) == 0) { settings_style = i; break; }
+        } else if (strcmp(line, "center_text") == 0) {
+            settings_center_text = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "horizontal_layout") == 0) {
             /* Migrate the short-lived toggle form without changing how that
              * user's carousel labels looked. */
@@ -866,6 +870,7 @@ static void settings_save_file(void) {
     fprintf(f, "autosave_autoload=%s\n", onoff_names[settings_autosave_autoload]);
     fprintf(f, "animations=%s\n", onoff_names[settings_anim]);
     fprintf(f, "style=%s\n", style_keys[settings_style]);
+    fprintf(f, "center_text=%s\n", onoff_names[settings_center_text]);
     fprintf(f, "friendly_system_names=%s\n", onoff_names[settings_friendly_names]);
     fprintf(f, "hide_empty=%s\n", onoff_names[settings_hide_empty]);
     fprintf(f, "hide_extensions=%s\n", onoff_names[settings_hide_extensions]);
@@ -2704,8 +2709,13 @@ void retro_run(void) {
                     char *dot = strrchr(disp, '.');
                     if (dot && dot != disp) { *dot = '\0'; shown = disp; }
                 }
-                render_menu_item(framebuffer, idx, shown, entries[idx].is_dir,
-                                 (idx == selected_index), scroll_offset, 0);
+                if (settings_center_text && settings_style == STYLE_VERTICAL &&
+                    strcmp(current_path, ROMS_PATH) == 0)
+                    render_menu_item_centered(framebuffer, idx, shown, entries[idx].is_dir,
+                                              (idx == selected_index), scroll_offset);
+                else
+                    render_menu_item(framebuffer, idx, shown, entries[idx].is_dir,
+                                     (idx == selected_index), scroll_offset, 0);
             }
         }
         /* Box-art panel for the selected game (normal browsing only). */
