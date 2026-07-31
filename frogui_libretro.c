@@ -494,6 +494,10 @@ int frogui_battery_pct(void) {
         int a1 = read_adc(0);   /* battery = check_adc1 */
         int a5 = read_adc(1);   /* charge detect = check_adc5 (~0 idle, ~140 charging) */
         cached = (a1 >= 0) ? raw_to_pct(a1) : -1;
+        /* R36SX charge ADCs commonly plateau below the SF-class 224 raw
+         * endpoint. When the charger reports an active/full state, treat the
+         * upper battery plateau as full instead of showing roughly two-thirds. */
+        if (a1 >= 180 && a5 >= 64) cached = 100;
         g_batt_charging = (a5 >= 64) ? 1 : 0;
     }
     fb1_clear_battery_zone();
