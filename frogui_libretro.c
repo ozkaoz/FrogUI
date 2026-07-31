@@ -460,7 +460,8 @@ static int raw_to_pct(int raw) {
     /* The ADC tops out around 224 on a charged pack. The old curve reserved
      * 100% for the byte maximum (255), so real hardware could never display a
      * full battery. Keep the measured low/mid points and plateau at 224. */
-    static const int rx[] = { 64, 153, 224 };
+    /* R36SX's ADC tops out around 180 when full; SF-class units reach ~224. */
+    static const int rx[] = { 64, 153, 180 };
     static const int py[] = {  0,  50, 100 };
     if (raw <= rx[0]) return 0;
     for (int i = 1; i < 3; i++) if (raw <= rx[i]) {
@@ -494,10 +495,6 @@ int frogui_battery_pct(void) {
         int a1 = read_adc(0);   /* battery = check_adc1 */
         int a5 = read_adc(1);   /* charge detect = check_adc5 (~0 idle, ~140 charging) */
         cached = (a1 >= 0) ? raw_to_pct(a1) : -1;
-        /* R36SX charge ADCs commonly plateau below the SF-class 224 raw
-         * endpoint. When the charger reports an active/full state, treat the
-         * upper battery plateau as full instead of showing roughly two-thirds. */
-        if (a1 >= 180 && a5 >= 64) cached = 100;
         g_batt_charging = (a5 >= 64) ? 1 : 0;
     }
     fb1_clear_battery_zone();
