@@ -127,7 +127,8 @@ void render_text_pillbox(uint16_t *framebuffer, int x, int y, const char *text,
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, x, y, text, text_color);
 }
 
-void render_battery(uint16_t *framebuffer, int pct) {
+void render_battery_colors(uint16_t *framebuffer, int pct,
+                           uint16_t bg_color, uint16_t accent_color) {
     if (!framebuffer || pct < 0) return;
     if (pct > 100) pct = 100;
     extern int frogui_battery_charging(void);
@@ -146,18 +147,18 @@ void render_battery(uint16_t *framebuffer, int pct) {
     int x = SCREEN_WIDTH - PADDING - bw - nub_w;
     int y = 10;                               /* header baseline area */
 
-    uint16_t outline = COLOR_HEADER;
+    uint16_t outline = accent_color;
     uint16_t green   = 0x2FE6;                /* charging fill */
     uint16_t fillcol;
     if (color_mode)
         fillcol = charging ? green : (pct >= 70) ? green : (pct >= 30) ? 0x041F : 0xF800;
     else
-        fillcol = charging ? green : ((pct <= 15) ? 0xF800 /*red*/ : COLOR_HEADER);
+        fillcol = charging ? green : ((pct <= 15) ? 0xF800 /*red*/ : accent_color);
 
     /* body outline (rounded), hollow */
     int r = UI_S(3);
     render_rounded_rect(framebuffer, x, y, bw, bh, r, outline);
-    render_rounded_rect(framebuffer, x + 1, y + 1, bw - 2, bh - 2, r - 1, COLOR_BG);
+    render_rounded_rect(framebuffer, x + 1, y + 1, bw - 2, bh - 2, r - 1, bg_color);
     /* terminal nub */
     render_fill_rect(framebuffer, x + bw, y + (bh - nub_h) / 2, nub_w, nub_h, outline);
     /* fill proportional to pct */
@@ -180,6 +181,10 @@ void render_battery(uint16_t *framebuffer, int pct) {
             (void)w;
         }
     }
+}
+
+void render_battery(uint16_t *framebuffer, int pct) {
+    render_battery_colors(framebuffer, pct, COLOR_BG, COLOR_HEADER);
 }
 
 void render_header(uint16_t *framebuffer, const char *title) {

@@ -1321,13 +1321,20 @@ static void switcher_blit565(uint16_t *fb, const uint16_t *src, const uint8_t *a
     }
 }
 
+static void render_game_switcher_header(uint16_t *framebuffer, int barh) {
+    render_fill_rect(framebuffer, 0, 0, SCREEN_WIDTH, barh, COLOR_LEGEND_BG);
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, 10,
+                   "GameSwitcher", COLOR_DISABLED);
+    render_battery_colors(framebuffer, frogui_battery_pct(),
+                          COLOR_LEGEND_BG, COLOR_DISABLED);
+}
+
 static void render_game_switcher(uint16_t *framebuffer) {
     const RecentGame *list = recent_games_get_list();
     int n = recent_games_get_count();
     int barh = UI_S(30);
     if (n <= 0) {
-        render_fill_rect(framebuffer, 0, 0, SCREEN_WIDTH, barh, COLOR_BG);
-        render_header(framebuffer, "GameSwitcher");
+        render_game_switcher_header(framebuffer, barh);
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, SCREEN_HEIGHT/2,
                        "No recent games yet", COLOR_TEXT);
         render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
@@ -1377,9 +1384,9 @@ static void render_game_switcher(uint16_t *framebuffer) {
 
     /* Bottom info bar: game name (left) + position / play time (right). */
     int byb = SCREEN_HEIGHT - barh;
-    render_fill_rect(framebuffer, 0, byb, SCREEN_WIDTH, barh, COLOR_BG);
+    render_fill_rect(framebuffer, 0, byb, SCREEN_WIDTH, barh, COLOR_SELECT_BG);
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, byb + UI_S(8),
-                   g->game_name, COLOR_TEXT);
+                   g->game_name, COLOR_SELECT_TEXT);
     char info[96];
     long secs = playtime_lookup(g->full_path);
     if (secs >= 3600)
@@ -1392,9 +1399,8 @@ static void render_game_switcher(uint16_t *framebuffer) {
         snprintf(info, sizeof info, "%d/%d", selected_index + 1, n);
     int iw = (int)strlen(info) * UI_S(8);
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH - iw - PADDING, byb + UI_S(8),
-                   info, COLOR_TEXT);
-    render_fill_rect(framebuffer, 0, 0, SCREEN_WIDTH, barh, COLOR_BG);
-    render_header(framebuffer, "GameSwitcher");
+                   info, COLOR_SELECT_TEXT);
+    render_game_switcher_header(framebuffer, barh);
 }
 
 /* Box-art side panel (Onion/muOS-style): right portion of the list view shows

@@ -70,6 +70,10 @@ void render_rounded_rect(uint16_t *framebuffer, int x, int y, int width, int hei
 /* NextUI-style battery pill: rounded body + nub + proportional fill. pct 0..100;
  * top-right of the header. Draws nothing if pct < 0. */
 void render_battery(uint16_t *framebuffer, int pct);
+/* Battery variant for coloured bars whose background/foreground differ from
+ * the normal theme header. */
+void render_battery_colors(uint16_t *framebuffer, int pct,
+                           uint16_t bg_color, uint16_t accent_color);
 
 // Draw a text pillbox with proper padding (unified method)
 void render_text_pillbox(uint16_t *framebuffer, int x, int y, const char *text,
