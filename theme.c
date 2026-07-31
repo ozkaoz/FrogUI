@@ -362,6 +362,30 @@ const Theme themes[] = {
         .legend = RGB565(131, 148, 150),
         .legend_bg = RGB565(7, 54, 66),
         .disabled = RGB565(88, 110, 117)
+    },
+    {
+        .name = "Catppuccin Mocha",
+        .bg = RGB565(30, 30, 46),
+        .text = RGB565(205, 214, 244),
+        .select_bg = RGB565(203, 166, 247),
+        .select_text = RGB565(30, 30, 46),
+        .header = RGB565(137, 180, 250),
+        .folder = RGB565(166, 227, 161),
+        .legend = RGB565(186, 194, 222),
+        .legend_bg = RGB565(49, 50, 68),
+        .disabled = RGB565(127, 132, 156)
+    },
+    {
+        .name = "Aura",
+        .bg = RGB565(24, 23, 38),
+        .text = RGB565(242, 233, 225),
+        .select_bg = RGB565(235, 188, 186),
+        .select_text = RGB565(45, 35, 52),
+        .header = RGB565(196, 167, 231),
+        .folder = RGB565(245, 194, 231),
+        .legend = RGB565(221, 193, 255),
+        .legend_bg = RGB565(53, 43, 70),
+        .disabled = RGB565(150, 137, 171)
     }
 };
 
