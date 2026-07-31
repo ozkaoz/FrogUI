@@ -2187,7 +2187,24 @@ static void handle_input(void) {
             strncpy(current_path, ROMS_PATH, MAX_PATH_LEN-1);
         } else if (strcmp(current_path, ROMS_PATH) != 0) {
             char *slash = strrchr(current_path, '/');
-            if (slash) { *slash = '\0'; scan_directory(current_path); }
+            if (slash) {
+                /* scan_directory resets selection for a fresh listing. Keep
+                 * the folder name so returning from a system restores the row
+                 * we entered instead of jumping to the first item. */
+                char child[MAX_PATH_LEN];
+                strncpy(child, slash + 1, sizeof(child) - 1);
+                child[sizeof(child) - 1] = '\0';
+                *slash = '\0';
+                scan_directory(current_path);
+                for (int i = 0; i < entry_count; i++) {
+                    if (strcmp(entries[i].name, child) == 0) {
+                        selected_index = i;
+                        scroll_offset = (i >= VISIBLE_ENTRIES)
+                                      ? i - VISIBLE_ENTRIES + 1 : 0;
+                        break;
+                    }
+                }
+            }
         }
     }
 
