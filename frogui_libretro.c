@@ -1072,12 +1072,12 @@ static void load_banner_for_view(const char *path, bool is_recents, bool is_favo
     if (is_recents) {
         for (int i = 0; exts[i]; i++) {
             snprintf(img, sizeof(img), "%s/recents.%s", banner_dir, exts[i]);
-            if (access(img, R_OK) == 0) { banner_load(img); return; }
+            if (access(img, R_OK) == 0) { banner_load_fit(img, settings_wallpaper_fit, COLOR_BG); return; }
         }
     } else if (is_favourites) {
         for (int i = 0; exts[i]; i++) {
             snprintf(img, sizeof(img), "%s/favourites.%s", banner_dir, exts[i]);
-            if (access(img, R_OK) == 0) { banner_load(img); return; }
+            if (access(img, R_OK) == 0) { banner_load_fit(img, settings_wallpaper_fit, COLOR_BG); return; }
         }
     } else {
         const char *base = (path && *path) ? strrchr(path, '/') : NULL;
@@ -1085,12 +1085,12 @@ static void load_banner_for_view(const char *path, bool is_recents, bool is_favo
         if (!name || !*name) name = "main";
         for (int i = 0; exts[i]; i++) {
             snprintf(img, sizeof(img), "%s/%s.%s", banner_dir, name, exts[i]);
-            if (access(img, R_OK) == 0) { banner_load(img); return; }
+            if (access(img, R_OK) == 0) { banner_load_fit(img, settings_wallpaper_fit, COLOR_BG); return; }
         }
         /* Fallback: try main.png for any view that has no folder-specific image */
         for (int i = 0; exts[i]; i++) {
             snprintf(img, sizeof(img), "%s/main.%s", banner_dir, exts[i]);
-            if (access(img, R_OK) == 0) { banner_load(img); return; }
+            if (access(img, R_OK) == 0) { banner_load_fit(img, settings_wallpaper_fit, COLOR_BG); return; }
         }
     }
     banner_clear();
