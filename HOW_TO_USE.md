@@ -63,7 +63,7 @@ FrogUI is a modern file browser interface for the SF2000/GB300 that provides acc
 | `gw` | Game & Watch | libretro-gw | `.mgw` |
 | `arduboy` | Arduboy | Arduous | `.hex` |
 | **Home Computers** ||||
-| `amstrad` | Amstrad CPC | CrocoDS | `.dsk`, `.sna` |
+| `amstrad` | Amstrad CPC | Cap32 | `.dsk`, `.sna`, `.cdt`, `.zip` |
 | `amstradb` | Amstrad CPC (alt) | Cap32 | `.dsk`, `.sna` |
 | `c64` | Commodore 64 | VICE x64 | `.d64`, `.t64`, `.prg` |
 | `c64sc` | Commodore 64 (cycle) | VICE x64sc | `.d64`, `.t64`, `.prg` |

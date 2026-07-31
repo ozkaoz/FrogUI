@@ -118,7 +118,7 @@ static const ConsoleMapping console_mappings[] = {
     {"c64fc",  CORES_PATH "/frodo_libretro.so"},
     {"vic20",  CORES_PATH "/vice_xvic_libretro.so"},
     /* Amstrad */
-    {"amstrad",  CORES_PATH "/crocods_libretro.so"},
+    {"amstrad",  CORES_PATH "/cap32_libretro.so"},
     {"amstradb", CORES_PATH "/cap32_libretro.so"},
     /* ZX Spectrum */
     {"spec",   CORES_PATH "/fuse_libretro.so"},
