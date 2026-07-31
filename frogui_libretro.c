@@ -2771,23 +2771,6 @@ void retro_run(void) {
                     ? "TREEFROGUI: SYSTEMS" : system_display_name(get_basename(current_path));
         }
         render_header(framebuffer, title);
-        /* Pastel layouts use the system artwork as a contained preview card.
-         * Keep the list on the left and never stretch the artwork across the
-         * whole screen. Horizontal carousel keeps its own card treatment. */
-        if (strcmp(current_path, ROMS_PATH) == 0 &&
-            !viewing_recents && !viewing_favourites && !viewing_search &&
-            selected_index >= 0 && selected_index < entry_count &&
-            entries[selected_index].is_dir &&
-            (strcmp(theme_get_name(settings_theme_idx), "Catppuccin Mocha") == 0 ||
-             strcmp(theme_get_name(settings_theme_idx), "Aura") == 0)) {
-            int card_x = SCREEN_WIDTH * 3 / 5;
-            int card_y = START_Y + UI_S(8);
-            int card_w = SCREEN_WIDTH - card_x - PADDING;
-            int card_h = UI_S(170);
-            if (card_h > SCREEN_HEIGHT - card_y - UI_S(42))
-                card_h = SCREEN_HEIGHT - card_y - UI_S(42);
-            banner_draw_card(framebuffer, card_x, card_y, card_w, card_h);
-        }
         {
             int visible = min(entry_count - scroll_offset, VISIBLE_ENTRIES);
             for (int i = 0; i < visible; i++) {
