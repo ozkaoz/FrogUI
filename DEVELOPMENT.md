@@ -43,7 +43,9 @@ This will create:
 ## Technical Details
 
 ### Screen Resolution
-- 320x240 pixels
+- Runtime panel geometry, detected by picoarch:
+  - R36SX: 640x480 pixels (4:3)
+  - SF3000/SF3500/SF3100/HD: 854x480 pixels (16:9)
 - RGB565 color format
 
 ### Input Handling
