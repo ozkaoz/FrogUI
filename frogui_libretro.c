@@ -383,17 +383,19 @@ static void dbg(const char *msg) {
     fprintf(stderr, "FROGUI_DBG: %s\n", msg);
 }
 
-/* Hide cubevol's battery glyph (top-right of fb1) while leaving its volume popup
- * (center) intact - our custom volume popup blinks against the hw-composited
- * overlay (see docs/osd-battery-volume.md), so we keep cubevol's. Zero just the
- * top-right corner each frame. */
+/* Hide cubevol's battery glyph while leaving its centered volume popup intact.
+ * fb1 is rotated and/or double-buffered on SF3500-class devices, so physical
+ * top-right is not reliably memory top-right and the active page is not always
+ * page zero. Clear every memory corner on every virtual page. */
 static void fb1_clear_battery_zone(void) {
     /* Persistent mmap + cached geometry: open/mmap ONCE. The old per-frame
      * open+ioctl+mmap+munmap+close stalled the loop (visible input lag).
      * Do not latch a failed first attempt: early boot may reach FrogUI before
      * fb1 is ready, so retry later until the one-time mmap succeeds. */
-    static void *mem = NULL; static int inited = 0;
-    static int pitch = 0, bpp = 4, zx = 0, zw = 0, zh = 0, ph = 0;
+    static unsigned char *mem = NULL; static int inited = 0;
+    static size_t map_len = 0;
+    static int pitch = 0, bpp = 4, vx = 0, vw = 0, vh = 0;
+    static int corner_w = 0, corner_h = 0, mapped_rows = 0;
     if (!inited) {
         int fd = open("/dev/fb1", O_RDWR);
         if (fd < 0) return;
@@ -403,19 +405,52 @@ static void fb1_clear_battery_zone(void) {
             void *m = mmap(NULL, fi.smem_len, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
             if (m != MAP_FAILED) {
                 mem = m;
+                map_len = fi.smem_len;
                 bpp = vi.bits_per_pixel / 8; if (bpp < 1) bpp = 4;
                 pitch = fi.line_length ? (int)fi.line_length : (int)vi.xres * bpp;
-                zx = vi.xres * 3 / 4; zw = vi.xres - zx;
-                zh = vi.yres / 8; if (zh < 24) zh = 24;
-                ph = vi.yres;
+                vx = vi.xoffset;
+                vw = vi.xres;
+                vh = vi.yres;
+                mapped_rows = pitch > 0 ? (int)(map_len / (size_t)pitch) : 0;
+                corner_w = vw / 4; if (corner_w < 110) corner_w = 110;
+                if (corner_w > vw / 2) corner_w = vw / 2;
+                corner_h = vh / 8; if (corner_h < 100) corner_h = 100;
+                if (corner_h > vh / 3) corner_h = vh / 3;
                 inited = 1;
             }
         }
         close(fd);   /* mmap survives close */
     }
-    if (!mem) return;
-    for (int y = 0; y < zh && y < ph; y++)
-        memset((char*)mem + (size_t)y*pitch + (size_t)zx*bpp, 0, (size_t)zw*bpp);
+    if (!mem || pitch <= 0 || vh <= 0 || mapped_rows <= 0) return;
+
+    int left_x = vx;
+    int right_x = vx + vw - corner_w;
+    if (left_x < 0) left_x = 0;
+    if (right_x < 0) right_x = 0;
+    size_t want_bytes = (size_t)corner_w * bpp;
+    size_t left_off = (size_t)left_x * bpp;
+    size_t right_off = (size_t)right_x * bpp;
+    size_t left_bytes = left_off < (size_t)pitch
+                      ? min(want_bytes, (size_t)pitch - left_off) : 0;
+    size_t right_bytes = right_off < (size_t)pitch
+                       ? min(want_bytes, (size_t)pitch - right_off) : 0;
+
+    for (int page = 0; page < mapped_rows; page += vh) {
+        int page_h = mapped_rows - page;
+        if (page_h > vh) page_h = vh;
+        for (int y = 0; y < corner_h && y < page_h; y++) {
+            int rows[2] = { page + y, page + page_h - 1 - y };
+            for (int r = 0; r < 2; r++) {
+                size_t row = (size_t)rows[r] * pitch;
+                size_t lo = row + left_off;
+                size_t ro = row + right_off;
+                if (left_bytes && lo + left_bytes <= map_len)
+                    memset(mem + lo, 0, left_bytes);
+                if (right_bytes && ro + right_bytes <= map_len)
+                    memset(mem + ro, 0, right_bytes);
+            }
+        }
+    }
 }
 
 /* Cached battery % for the header (re-read every ~2s; ADC changes slowly). Also
@@ -2591,11 +2626,10 @@ void retro_run(void) {
         last_sig = sig; first = 0;
     }
     if (!redraw) {
-        /* Keep cubevol's old top-right glyph hidden after any delayed
-         * charge-status repaint. At the ~1 ms idle-loop cadence this is about
-         * 10 clears/sec, while the mmap itself is cached. */
+        /* Catch cubevol's asynchronous charging repaint within roughly one
+         * display frame. The mmap and geometry stay cached. */
         static unsigned fb1_idle_ticks = 0;
-        if (++fb1_idle_ticks >= 100) {
+        if (++fb1_idle_ticks >= 16) {
             fb1_idle_ticks = 0;
             fb1_clear_battery_zone();
         }
