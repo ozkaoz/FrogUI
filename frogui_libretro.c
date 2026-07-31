@@ -674,6 +674,24 @@ static int settings_hide_extensions = 1; /* hide file extensions in the browser:
 static int settings_backgrounds = 1;     /* show per-system background images: 0=off (solid theme bg), 1=on */
 static int settings_file_cache = 0;      /* cache folder listings (mtime-keyed) for fast nav: 0=off, 1=on */
 static int settings_battery_color = 0;   /* "Nel Battery Mode": solid color light by level instead of fill bar */
+
+/* Pastel themes are complete treatments, not palette-only options.  Pair
+ * them with their matching artwork pack whenever the theme is applied. */
+static void theme_sync_artwork_pack(void) {
+    const char *wanted = NULL;
+    const char *theme = theme_get_name(settings_theme_idx);
+    if (strcmp(theme, "Catppuccin Mocha") == 0) wanted = "Catppuccin";
+    else if (strcmp(theme, "Aura") == 0) wanted = "Aura";
+    if (!wanted) return;
+    for (int i = 0; i < theme_pack_count; i++) {
+        if (strcasecmp(theme_pack_files[i], wanted) == 0 ||
+            strcasecmp(theme_pack_disp[i], wanted) == 0) {
+            settings_theme_pack_idx = i;
+            return;
+        }
+    }
+}
+
 int frogui_battery_color_mode(void) { return settings_battery_color; }
 static int settings_game_switcher = 1;  /* recents as box-art carousel: 0=off, 1=on */
 static int settings_load_recents = 0;   /* start FrogUI in the recents view: 0=off, 1=on */
@@ -761,6 +779,7 @@ static void settings_apply(void) {
     if (settings_brightness < 0)   settings_brightness = 0;
     if (settings_brightness > 100) settings_brightness = 100;
     theme_apply(settings_theme_idx);
+    theme_sync_artwork_pack();
     if (font_count > 0)
         font_load_file(font_files[settings_font_idx]);
     cube_set_backlight(settings_brightness);
@@ -785,6 +804,7 @@ static void settings_preview_row(const SRow *r) {
     switch (r->type) {
     case RT_THEME:
         theme_apply(settings_theme_idx);
+        theme_sync_artwork_pack();
         break;
     case RT_FONT:
         if (font_count > 0) font_load_file(font_files[settings_font_idx]);
