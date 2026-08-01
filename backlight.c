@@ -72,11 +72,10 @@ void cube_set_backlight(int level) {
 
 void fb1_set_visible(int visible) {
     if (!visible) return;
-    /* Do NOT kill/restart cubevol: it owns the volume-button gpio, and killing it
-     * (even with a respawn) drops volume control. cubevol stays alive from boot
-     * and repaints the battery/volume OSD on its own next poll (charge-% tick or
-     * a volume press), so the OSD returns without a restart. Only respawn if it
-     * somehow died, so volume always works. */
-    if (system("pidof cubevol >/dev/null 2>&1") != 0)
-        system("/usr/bin/cubevol &");
+    /* Reset cubevol's fb1 OSD plane on every FrogUI start. Keeping an old
+     * instance alive leaves its previous transparent/dirty corner state in
+     * place when a long-press power shutdown hands the display to the stock
+     * logo renderer. The shared input segment survives the restart. */
+    system("killall cubevol 2>/dev/null; /usr/bin/cubevol &");
+    usleep(50000);
 }
