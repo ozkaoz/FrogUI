@@ -453,6 +453,24 @@ static void fb1_clear_battery_zone(void) {
     }
 }
 
+/* Clear cubevol's entire overlay before handing control back to the stock
+ * launcher.  The battery indicator is drawn on the main UI framebuffer, but
+ * cubevol's fb1 plane can otherwise survive the handoff and show old corner
+ * pixels over the shutdown/boot logo. */
+static void fb1_clear_all(void) {
+    int fd = open("/dev/fb1", O_RDWR);
+    if (fd < 0) return;
+    struct fb_fix_screeninfo fi;
+    if (ioctl(fd, FBIOGET_FSCREENINFO, &fi) == 0 && fi.smem_len > 0) {
+        void *mem = mmap(NULL, fi.smem_len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (mem != MAP_FAILED) {
+            memset(mem, 0, fi.smem_len);
+            munmap(mem, fi.smem_len);
+        }
+    }
+    close(fd);
+}
+
 /* Cached battery % for the header (re-read every ~2s; ADC changes slowly). Also
  * clears cubevol's battery corner each call so its glyph stays hidden. Called by
  * render_header (every screen, every frame). */
@@ -1618,6 +1636,7 @@ static void write_picoarch_skin(void) {
 }
 
 static void request_game_launch(const char *core_path, const char *rom_path) {
+    fb1_clear_all();
     write_picoarch_skin();
     FILE *f = fopen(LAUNCH_FILE, "w");
     if (!f) { dbg("failed to write launch file"); return; }
@@ -1639,6 +1658,7 @@ static void request_game_launch(const char *core_path, const char *rom_path) {
 
 static void request_standalone_launch(const char *bin_path, const char *rom_path) {
     dbg("standalone_launch: start");
+    fb1_clear_all();
     FILE *f = fopen(LAUNCH_FILE, "w");
     if (!f) { dbg("standalone_launch: fopen failed"); return; }
     fprintf(f, "standalone\n%s\n%s\n", bin_path, rom_path);
