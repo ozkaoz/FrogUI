@@ -444,10 +444,21 @@ static void fb1_clear_battery_zone(void) {
                 size_t row = (size_t)rows[r] * pitch;
                 size_t lo = row + left_off;
                 size_t ro = row + right_off;
-                if (left_bytes && lo + left_bytes <= map_len)
-                    memset(mem + lo, 0, left_bytes);
-                if (right_bytes && ro + right_bytes <= map_len)
-                    memset(mem + ro, 0, right_bytes);
+                if (bpp == 4) {
+                    /* Keep the OSD plane opaque in the cleared corners. A
+                     * transparent memset exposes the stale fb0 TreeFrogUI
+                     * frame during the stock shutdown/logo handoff. */
+                    size_t ln = left_bytes / 4, rn = right_bytes / 4;
+                    uint32_t *lp = (uint32_t *)(mem + lo);
+                    uint32_t *rp = (uint32_t *)(mem + ro);
+                    for (size_t x = 0; x < ln; x++) lp[x] = 0xFF000000u;
+                    for (size_t x = 0; x < rn; x++) rp[x] = 0xFF000000u;
+                } else {
+                    if (left_bytes && lo + left_bytes <= map_len)
+                        memset(mem + lo, 0, left_bytes);
+                    if (right_bytes && ro + right_bytes <= map_len)
+                        memset(mem + ro, 0, right_bytes);
+                }
             }
         }
     }
