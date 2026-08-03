@@ -423,33 +423,20 @@ static void fb1_clear_battery_zone(void) {
     }
     if (!mem || pitch <= 0 || vh <= 0 || mapped_rows <= 0) return;
 
-    int left_x = vx;
     int right_x = vx + vw - corner_w;
-    if (left_x < 0) left_x = 0;
     if (right_x < 0) right_x = 0;
     size_t want_bytes = (size_t)corner_w * bpp;
-    size_t left_off = (size_t)left_x * bpp;
     size_t right_off = (size_t)right_x * bpp;
-    size_t left_bytes = left_off < (size_t)pitch
-                      ? min(want_bytes, (size_t)pitch - left_off) : 0;
     size_t right_bytes = right_off < (size_t)pitch
                        ? min(want_bytes, (size_t)pitch - right_off) : 0;
 
-    for (int page = 0; page < mapped_rows; page += vh) {
-        int page_h = mapped_rows - page;
-        if (page_h > vh) page_h = vh;
-        for (int y = 0; y < corner_h && y < page_h; y++) {
-            int rows[2] = { page + y, page + page_h - 1 - y };
-            for (int r = 0; r < 2; r++) {
-                size_t row = (size_t)rows[r] * pitch;
-                size_t lo = row + left_off;
-                size_t ro = row + right_off;
-                if (left_bytes && lo + left_bytes <= map_len)
-                    memset(mem + lo, 0, left_bytes);
-                if (right_bytes && ro + right_bytes <= map_len)
-                    memset(mem + ro, 0, right_bytes);
-            }
-        }
+    /* R36SX's stock battery glyph is top-right on page zero. Do not clear
+     * other corners/pages: those transparent writes survive a hard shutdown
+     * and expose the stale TreeFrogUI frame under the stock logo. */
+    for (int y = 0; y < corner_h && y < vh; y++) {
+        size_t ro = (size_t)y * pitch + right_off;
+        if (right_bytes && ro + right_bytes <= map_len)
+            memset(mem + ro, 0, right_bytes);
     }
 }
 
