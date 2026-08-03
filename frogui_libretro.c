@@ -675,6 +675,7 @@ static int settings_friendly_names = 0; /* expand system folder codes in either 
 static int settings_hide_empty = 1;     /* hide rom folders with no games: 0=off, 1=on */
 static int settings_hide_extensions = 1; /* hide file extensions in the browser: 0=off, 1=on */
 static int settings_backgrounds = 1;     /* show per-system background images: 0=off (solid theme bg), 1=on */
+static int settings_background_dim = 0;  /* darken background artwork: 0=unchanged, 100=black */
 static int settings_file_cache = 0;      /* cache folder listings (mtime-keyed) for fast nav: 0=off, 1=on */
 static int settings_battery_color = 0;   /* "Nel Battery Mode": solid color light by level instead of fill bar */
 
@@ -733,6 +734,7 @@ static const SRow settings_rows[] = {
     { RT_TOGGLE, "Animations", &settings_anim },
     { RT_TOGGLE, "Battery Colour Mode", &settings_battery_color },
     { RT_TOGGLE, "Background Images", &settings_backgrounds },
+    { RT_RANGE,  "Background Dim", &settings_background_dim, 0, 100, 5 },
     { RT_THEME_PACK, "Background Theme Pack" },
     { RT_WALLPAPER, "Wallpaper" },
     { RT_WALLFIT, "Background Image Fit" },
@@ -782,6 +784,8 @@ static void settings_apply(void) {
     if (settings_font_idx < 0 || settings_font_idx >= font_count) settings_font_idx = 0;
     if (settings_brightness < 0)   settings_brightness = 0;
     if (settings_brightness > 100) settings_brightness = 100;
+    if (settings_background_dim < 0)   settings_background_dim = 0;
+    if (settings_background_dim > 100) settings_background_dim = 100;
     theme_apply(settings_theme_idx);
     theme_sync_artwork_pack();
     if (font_count > 0)
@@ -791,6 +795,7 @@ static void settings_apply(void) {
      * shows the right brightness instead of flashing its stored default. */
     cube_pmem_backlight_sync(settings_brightness);
     banner_set_anim(settings_anim);
+    banner_set_dim(settings_background_dim);
     /* Global output volume: there's no system mixer on this hardware, so every
      * frontend (picoarch, pcsx4all, lgpt) reads this percent from sndgain.txt and
      * scales its own audio. FrogUI is the single place to set it. */
@@ -816,6 +821,8 @@ static void settings_preview_row(const SRow *r) {
     case RT_RANGE:
         if (r->val == &settings_brightness)
             cube_set_backlight(settings_brightness);
+        else if (r->val == &settings_background_dim)
+            banner_set_dim(settings_background_dim);
         break;
     case RT_TOGGLE:
         if (r->val == &settings_anim) banner_set_anim(settings_anim);
@@ -897,6 +904,8 @@ static void settings_load_file(void) {
             settings_hide_extensions = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "backgrounds") == 0) {
             settings_backgrounds = (strcmp(val, "on") == 0) ? 1 : 0;
+        } else if (strcmp(line, "background_dim") == 0) {
+            settings_background_dim = atoi(val);
         } else if (strcmp(line, "file_cache") == 0) {
             settings_file_cache = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "folder_cache") == 0) {
@@ -941,6 +950,7 @@ static void settings_save_file(void) {
     fprintf(f, "hide_empty=%s\n", onoff_names[settings_hide_empty]);
     fprintf(f, "hide_extensions=%s\n", onoff_names[settings_hide_extensions]);
     fprintf(f, "backgrounds=%s\n", onoff_names[settings_backgrounds]);
+    fprintf(f, "background_dim=%d\n", settings_background_dim);
     fprintf(f, "file_cache=%s\n", onoff_names[settings_file_cache]);
     fprintf(f, "battery_color=%s\n", onoff_names[settings_battery_color]);
     fprintf(f, "game_switcher=%s\n", onoff_names[settings_game_switcher]);
@@ -2631,6 +2641,7 @@ void retro_run(void) {
     static int  banner_last_wp = -1;    /* reload when the wallpaper choice changes */
     static int  banner_last_wpfit = -1; /* reload when the wallpaper fit mode changes */
     static int  banner_last_pack = -1;  /* reload when the background pack changes */
+    static int  banner_last_dim = -1;   /* reload when background dim changes */
     {
         const char *banner_path = current_path;
         char sel_path[MAX_PATH_LEN];
@@ -2668,6 +2679,7 @@ void retro_run(void) {
             need_reload = (settings_wallpaper_idx != banner_last_wp ||
                            settings_wallpaper_fit != banner_last_wpfit ||
                            settings_theme_pack_idx != banner_last_pack ||
+                           settings_background_dim != banner_last_dim ||
                            settings_backgrounds  != banner_last_bg);
         } else {
             need_reload = (viewing_recents != banner_last_recents ||
@@ -2676,7 +2688,8 @@ void retro_run(void) {
                            settings_backgrounds != banner_last_bg ||
                            settings_wallpaper_idx != banner_last_wp ||
                            settings_wallpaper_fit != banner_last_wpfit ||
-                           settings_theme_pack_idx != banner_last_pack);
+                           settings_theme_pack_idx != banner_last_pack ||
+                           settings_background_dim != banner_last_dim);
         }
         if (need_reload) {
             load_banner_for_view(banner_path, viewing_recents, viewing_favourites);
@@ -2687,6 +2700,7 @@ void retro_run(void) {
             banner_last_wp = settings_wallpaper_idx;
             banner_last_wpfit = settings_wallpaper_fit;
             banner_last_pack = settings_theme_pack_idx;
+            banner_last_dim = settings_background_dim;
             strncpy(banner_last_path, banner_path, MAX_PATH_LEN - 1);
             banner_last_path[MAX_PATH_LEN - 1] = '\0';
         }

@@ -11,6 +11,7 @@ static uint16_t *banner_prev = NULL;  /* outgoing banner during crossfade */
 static int banner_loaded = 0;
 static char banner_active_key[600] = "";
 static int banner_anim = 1;           /* crossfade enabled */
+static int banner_dim = 0;            /* 0 = unchanged, 100 = black */
 #define FADE_FRAMES 20                /* ~330ms @ 60fps — slow, iPhone-like */
 static int fade_frame = FADE_FRAMES;  /* 0..FADE_FRAMES; FADE_FRAMES = done */
 
@@ -40,6 +41,12 @@ static int fade_amount(void) {
 void banner_set_anim(int enabled) {
     banner_anim = enabled ? 1 : 0;
     if (!banner_anim) fade_frame = FADE_FRAMES;
+}
+
+void banner_set_dim(int percent) {
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    banner_dim = percent;
 }
 
 /* LRU cache of fully-decoded + transformed panel-res backgrounds, keyed by
@@ -90,7 +97,7 @@ static void banner_snapshot_for_fade(int sw, int sh) {
 static void banner_load_common(const char *path, int mode, uint16_t bg) {
     int sw = SCREEN_WIDTH, sh = SCREEN_HEIGHT, npix = sw * sh;
     char key[600];
-    snprintf(key, sizeof key, "%s|%d|%u", path, mode, (unsigned)bg);
+    snprintf(key, sizeof key, "%s|%d|%u|dim=%d", path, mode, (unsigned)bg, banner_dim);
 
     /* Several systems can fall back to the same main image. Do not start a
      * pointless full-screen fade, or even memcpy, when the resolved art did
@@ -140,6 +147,7 @@ static void banner_load_common(const char *path, int mode, uint16_t bg) {
     }
     /* STRETCH: dst == screen. TILE handled inline below. */
 
+    int light = 100 - banner_dim;
     for (int y = 0; y < sh; y++) {
         for (int x = 0; x < sw; x++) {
             int sx, sy;
@@ -155,7 +163,10 @@ static void banner_load_common(const char *path, int mode, uint16_t bg) {
                 if (sy < 0) sy = 0; if (sy >= h) sy = h - 1;
             }
             unsigned char *p = img + (sy * w + sx) * 3;
-            banner_buf[y * sw + x] = rgb_to_565(p[0], p[1], p[2]);
+            banner_buf[y * sw + x] = rgb_to_565(
+                (unsigned char)(p[0] * light / 100),
+                (unsigned char)(p[1] * light / 100),
+                (unsigned char)(p[2] * light / 100));
         }
     }
 
