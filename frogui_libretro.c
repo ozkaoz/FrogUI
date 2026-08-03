@@ -500,18 +500,7 @@ static int g_batt_charging = 0;
 int frogui_battery_charging(void) { return g_batt_charging; }
 int frogui_battery_color_mode(void);   /* defined after settings_battery_color */
 int frogui_battery_pct(void) {
-    static int cached = -1, tick = 0;
-    /* Re-read every ~5s (300 frames @ 60fps); battery changes slowly. While still
-     * unread (cached < 0, e.g. the ADC node wasn't ready right at boot), retry
-     * every frame until it succeeds. */
-    if (cached < 0 || (tick++ % 300) == 0) {
-        int a1 = read_adc(0);   /* battery = check_adc1 */
-        int a5 = read_adc(1);   /* charge detect = check_adc5 (~0 idle, ~140 charging) */
-        cached = (a1 >= 0) ? raw_to_pct(a1) : -1;
-        g_batt_charging = (a5 >= 64) ? 1 : 0;
-    }
-    fb1_clear_battery_zone();
-    return cached;
+    return -1; /* custom battery disabled for an A/B shutdown test */
 }
 
 /* --- Input (via input.c / cubevol shmem) --- */
@@ -1449,8 +1438,6 @@ static void render_game_switcher_header(uint16_t *framebuffer, int barh) {
     render_fill_rect(framebuffer, 0, 0, SCREEN_WIDTH, barh, COLOR_LEGEND_BG);
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, 10,
                    "GameSwitcher", COLOR_DISABLED);
-    render_battery_colors(framebuffer, frogui_battery_pct(),
-                          COLOR_LEGEND_BG, COLOR_DISABLED);
 }
 
 static void render_game_switcher(uint16_t *framebuffer) {
@@ -2748,7 +2735,7 @@ void retro_run(void) {
         static unsigned fb1_idle_ticks = 0;
         if (++fb1_idle_ticks >= 16) {
             fb1_idle_ticks = 0;
-            fb1_clear_battery_zone();
+            /* custom battery/OSD clearing disabled for A/B test */
         }
         usleep(1000);
         return;
@@ -2756,7 +2743,7 @@ void retro_run(void) {
     /* Clear immediately on the first carousel frame and every real redraw.
      * Only the top-right battery zone is touched; cubevol's centered volume
      * popup remains available. */
-    fb1_clear_battery_zone();
+    /* custom battery/OSD clearing disabled for A/B test */
 
     if (search_kbd_active) {
         render_search_kbd();
