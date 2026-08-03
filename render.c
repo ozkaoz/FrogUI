@@ -193,7 +193,8 @@ void render_header(uint16_t *framebuffer, const char *title) {
     // Draw folder/section name in header area
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, 10, title, COLOR_HEADER);
 
-    /* Custom battery indicator temporarily disabled for an A/B shutdown test. */
+    // Battery indicator, top-right (custom icon; fb1 masking is disabled for test).
+    { extern int frogui_battery_pct(void); render_battery(framebuffer, frogui_battery_pct()); }
 }
 
 void render_legend(uint16_t *framebuffer, int x_button_mode, int show_select, int show_search) {

@@ -500,7 +500,13 @@ static int g_batt_charging = 0;
 int frogui_battery_charging(void) { return g_batt_charging; }
 int frogui_battery_color_mode(void);   /* defined after settings_battery_color */
 int frogui_battery_pct(void) {
-    return -1; /* custom battery disabled for an A/B shutdown test */
+    static int cached = -1, tick = 0;
+    if (cached < 0 || (tick++ % 300) == 0) {
+        int a1 = read_adc(0), a5 = read_adc(1);
+        cached = (a1 >= 0) ? raw_to_pct(a1) : -1;
+        g_batt_charging = (a5 >= 64) ? 1 : 0;
+    }
+    return cached;
 }
 
 /* --- Input (via input.c / cubevol shmem) --- */
@@ -1438,6 +1444,8 @@ static void render_game_switcher_header(uint16_t *framebuffer, int barh) {
     render_fill_rect(framebuffer, 0, 0, SCREEN_WIDTH, barh, COLOR_LEGEND_BG);
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, 10,
                    "GameSwitcher", COLOR_DISABLED);
+    render_battery_colors(framebuffer, frogui_battery_pct(),
+                          COLOR_LEGEND_BG, COLOR_DISABLED);
 }
 
 static void render_game_switcher(uint16_t *framebuffer) {
