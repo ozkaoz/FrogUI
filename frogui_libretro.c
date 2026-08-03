@@ -414,8 +414,8 @@ static void fb1_clear_battery_zone(void) {
                 mapped_rows = pitch > 0 ? (int)(map_len / (size_t)pitch) : 0;
                 /* Match the custom icon's exact body+nub footprint: 26x13
                  * baseline plus a 3px terminal, scaled with the UI. */
-                corner_w = UI_S(29);
-                corner_h = UI_S(13);
+                corner_w = UI_S(29) + 30;
+                corner_h = UI_S(13) + 30;
                 inited = 1;
             }
         }
@@ -433,7 +433,8 @@ static void fb1_clear_battery_zone(void) {
     /* R36SX's stock battery glyph is top-right on page zero. Do not clear
      * other corners/pages: those transparent writes survive a hard shutdown
      * and expose the stale TreeFrogUI frame under the stock logo. */
-    int top_y = UI_S(10);
+    int top_y = UI_S(10) - 15;
+    if (top_y < 0) top_y = 0;
     for (int y = top_y; y < top_y + corner_h && y < vh; y++) {
         size_t ro = (size_t)y * pitch + right_off;
         if (right_bytes && ro + right_bytes <= map_len)
