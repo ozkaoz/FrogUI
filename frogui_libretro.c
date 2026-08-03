@@ -538,7 +538,7 @@ static char wallpaper_files[MAX_WALL][FONT_STR_MAX];
 static char wallpaper_disp[MAX_WALL][FONT_STR_MAX];
 static int  wallpaper_count = 0;         /* includes slot 0 = "None" */
 static int  settings_wallpaper_idx = 0;  /* 0 = none/per-system */
-static int  settings_wallpaper_fit = 0;  /* BANNER_FIT_* (Fill/Fit/Stretch/Center/Tile) */
+static int  settings_wallpaper_fit = 2;  /* BANNER_FIT_* (Fill/Fit/Stretch/Center/Tile) */
 static const char *wallpaper_fit_names[] = { "Fill", "Fit", "Stretch", "Center", "Tile" };
 #define WALL_FIT_N 5
 
@@ -675,7 +675,7 @@ static int settings_friendly_names = 0; /* expand system folder codes in either 
 static int settings_hide_empty = 1;     /* hide rom folders with no games: 0=off, 1=on */
 static int settings_hide_extensions = 1; /* hide file extensions in the browser: 0=off, 1=on */
 static int settings_backgrounds = 1;     /* show per-system background images: 0=off (solid theme bg), 1=on */
-static int settings_background_dim = 0;  /* darken background artwork: 0=unchanged, 100=black */
+static int settings_background_dim = 15; /* darken background artwork: 0=unchanged, 100=black */
 static int settings_file_cache = 0;      /* cache folder listings (mtime-keyed) for fast nav: 0=off, 1=on */
 static int settings_battery_color = 0;   /* "Nel Battery Mode": solid color light by level instead of fill bar */
 
