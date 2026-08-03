@@ -412,12 +412,10 @@ static void fb1_clear_battery_zone(void) {
                 vw = vi.xres;
                 vh = vi.yres;
                 mapped_rows = pitch > 0 ? (int)(map_len / (size_t)pitch) : 0;
-                /* Keep the mask tight around cubevol's glyph: the previous
-                 * quarter-width/eighth-height box visibly covered UI art. */
-                corner_w = vw / 10; if (corner_w < 64) corner_w = 64;
-                if (corner_w > 128) corner_w = 128;
-                corner_h = vh / 12; if (corner_h < 40) corner_h = 40;
-                if (corner_h > 80) corner_h = 80;
+                /* Match the custom icon's exact body+nub footprint: 26x13
+                 * baseline plus a 3px terminal, scaled with the UI. */
+                corner_w = UI_S(29);
+                corner_h = UI_S(13);
                 inited = 1;
             }
         }
@@ -435,7 +433,8 @@ static void fb1_clear_battery_zone(void) {
     /* R36SX's stock battery glyph is top-right on page zero. Do not clear
      * other corners/pages: those transparent writes survive a hard shutdown
      * and expose the stale TreeFrogUI frame under the stock logo. */
-    for (int y = 0; y < corner_h && y < vh; y++) {
+    int top_y = UI_S(10);
+    for (int y = top_y; y < top_y + corner_h && y < vh; y++) {
         size_t ro = (size_t)y * pitch + right_off;
         if (right_bytes && ro + right_bytes <= map_len)
             memset(mem + ro, 0, right_bytes);
