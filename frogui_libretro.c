@@ -493,6 +493,7 @@ int frogui_battery_pct(void) {
         cached = (a1 >= 0) ? raw_to_pct(a1) : -1;
         g_batt_charging = (a5 >= 64) ? 1 : 0;
     }
+    fb1_clear_battery_zone();
     return cached;
 }
 
@@ -2730,7 +2731,7 @@ void retro_run(void) {
         static unsigned fb1_idle_ticks = 0;
         if (++fb1_idle_ticks >= 16) {
             fb1_idle_ticks = 0;
-            /* custom battery/OSD clearing disabled for A/B test */
+            fb1_clear_battery_zone();
         }
         usleep(1000);
         return;
@@ -2738,7 +2739,7 @@ void retro_run(void) {
     /* Clear immediately on the first carousel frame and every real redraw.
      * Only the top-right battery zone is touched; cubevol's centered volume
      * popup remains available. */
-    /* custom battery/OSD clearing disabled for A/B test */
+    fb1_clear_battery_zone();
 
     if (search_kbd_active) {
         render_search_kbd();
