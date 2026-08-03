@@ -412,10 +412,12 @@ static void fb1_clear_battery_zone(void) {
                 vw = vi.xres;
                 vh = vi.yres;
                 mapped_rows = pitch > 0 ? (int)(map_len / (size_t)pitch) : 0;
-                corner_w = vw / 4; if (corner_w < 110) corner_w = 110;
-                if (corner_w > vw / 2) corner_w = vw / 2;
-                corner_h = vh / 8; if (corner_h < 100) corner_h = 100;
-                if (corner_h > vh / 3) corner_h = vh / 3;
+                /* Keep the mask tight around cubevol's glyph: the previous
+                 * quarter-width/eighth-height box visibly covered UI art. */
+                corner_w = vw / 10; if (corner_w < 64) corner_w = 64;
+                if (corner_w > 128) corner_w = 128;
+                corner_h = vh / 12; if (corner_h < 40) corner_h = 40;
+                if (corner_h > 80) corner_h = 80;
                 inited = 1;
             }
         }
