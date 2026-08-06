@@ -81,6 +81,8 @@ void render_text_pillbox(uint16_t *framebuffer, int x, int y, const char *text,
 
 // Draw menu header with title
 void render_header(uint16_t *framebuffer, const char *title);
+/* Top-level Alium-style navigation. active: 0=Recents, 1=Games, 2=Settings. */
+void render_tabs(uint16_t *framebuffer, int active, uint16_t header_bg);
 
 // Legend modes for X button
 #define LEGEND_X_NONE      0
@@ -89,6 +91,10 @@ void render_header(uint16_t *framebuffer, const char *title);
 
 // Draw menu legend at bottom
 void render_legend(uint16_t *framebuffer, int x_button_mode, int show_select, int show_search);
+
+/* Small Onion-style polish shared by browser/settings views. */
+void render_scroll_indicator(uint16_t *framebuffer, int total, int selected, int visible);
+void render_toast(uint16_t *framebuffer, const char *text);
 
 // Draw a menu item (file or folder)
 void render_menu_item(uint16_t *framebuffer, int index, const char *name, int is_dir,

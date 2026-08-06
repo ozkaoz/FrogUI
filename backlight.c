@@ -72,10 +72,12 @@ void cube_set_backlight(int level) {
 
 void fb1_set_visible(int visible) {
     if (!visible) return;
-    /* Reset cubevol's fb1 OSD plane on every FrogUI start. Keeping an old
-     * instance alive leaves its previous transparent/dirty corner state in
-     * place when a long-press power shutdown hands the display to the stock
-     * logo renderer. The shared input segment survives the restart. */
-    system("killall cubevol 2>/dev/null; /usr/bin/cubevol &");
-    usleep(50000);
+    /* cubevol owns the physical volume GPIOs. Restarting it here can leave its
+     * button state/debounce machinery in a bad state (most visibly volume-down
+     * needing repeated presses). The battery mask handles the stale fb1 corner,
+     * so leave the stock daemon untouched. Only recover it if it actually died. */
+    if (system("pidof cubevol >/dev/null 2>&1") != 0) {
+        system("/usr/bin/cubevol &");
+        usleep(50000);
+    }
 }

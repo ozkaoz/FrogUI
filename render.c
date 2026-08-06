@@ -197,26 +197,49 @@ void render_header(uint16_t *framebuffer, const char *title) {
     { extern int frogui_battery_pct(void); render_battery(framebuffer, frogui_battery_pct()); }
 }
 
+void render_tabs(uint16_t *framebuffer, int active, uint16_t header_bg) {
+    static const char *labels[] = { "RECENTS", "GAMES", "SETTINGS" };
+    extern int frogui_battery_pct(void);
+    if (!framebuffer) return;
+
+    int x = PADDING;
+    int y = UI_S(5);
+    int h = ITEM_HEIGHT - UI_S(5);
+    int gap = UI_S(8);
+    for (int i = 0; i < 3; i++) {
+        int pad = UI_S(7);
+        int tw = font_measure_text(labels[i]);
+        int w = tw + pad * 2;
+        int baseline, cap_h;
+        font_cap_metrics(&baseline, &cap_h);
+        int ty = y + h / 2 - (baseline - cap_h / 2);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT,
+                       x + pad, ty, labels[i],
+                       i == active ? COLOR_TEXT : COLOR_DISABLED);
+        x += w + gap;
+    }
+    render_battery_colors(framebuffer, frogui_battery_pct(), header_bg, COLOR_HEADER);
+}
+
 void render_legend(uint16_t *framebuffer, int x_button_mode, int show_select, int show_search) {
     if (!framebuffer) return;
 
-    int pill_h   = ITEM_HEIGHT - UI_S(4);          /* pill height matches item scale */
-    int legend_y = SCREEN_HEIGHT - pill_h - UI_S(6); /* top of pill */
-    /* Place text so the cap-ink band centers in the pill (see render_text_pillbox). */
+    int pill_h   = ITEM_HEIGHT - UI_S(4);
+    int legend_y = SCREEN_HEIGHT - pill_h - UI_S(6);
     int baseline, cap_h;
     font_cap_metrics(&baseline, &cap_h);
     int text_y   = legend_y + pill_h / 2 - (baseline - cap_h / 2);
     int spacing  = UI_S(8);
-
-    /* Right-anchored: A-ENTER  B-BACK (always), X hint to its left if active */
     int anchor = SCREEN_WIDTH - PADDING;
 
     {
         const char *nav = " A-ENTER  B-BACK ";
         int w = font_measure_text(nav);
         int x = anchor - w;
-        render_rounded_rect(framebuffer, x - 4, legend_y, w + 8, pill_h, UI_S(8), COLOR_LEGEND_BG);
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, x, text_y, nav, COLOR_LEGEND);
+        render_rounded_rect(framebuffer, x - 4, legend_y, w + 8, pill_h,
+                            UI_S(8), COLOR_LEGEND_BG);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT,
+                       x, text_y, nav, COLOR_LEGEND);
         anchor = x - spacing;
     }
 
@@ -224,8 +247,10 @@ void render_legend(uint16_t *framebuffer, int x_button_mode, int show_select, in
         const char *xl = (x_button_mode == LEGEND_X_REMOVE) ? " Y-UNFAV " : " Y-FAV ";
         int w = font_measure_text(xl);
         int x = anchor - w;
-        render_rounded_rect(framebuffer, x - 4, legend_y, w + 8, pill_h, UI_S(8), COLOR_LEGEND_BG);
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, x, text_y, xl, COLOR_LEGEND);
+        render_rounded_rect(framebuffer, x - 4, legend_y, w + 8, pill_h,
+                            UI_S(8), COLOR_LEGEND_BG);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT,
+                       x, text_y, xl, COLOR_LEGEND);
         anchor = x - spacing;
     }
 
@@ -233,8 +258,10 @@ void render_legend(uint16_t *framebuffer, int x_button_mode, int show_select, in
         const char *sl = " SEL-OPTIONS ";
         int w = font_measure_text(sl);
         int x = anchor - w;
-        render_rounded_rect(framebuffer, x - 4, legend_y, w + 8, pill_h, UI_S(8), COLOR_LEGEND_BG);
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, x, text_y, sl, COLOR_LEGEND);
+        render_rounded_rect(framebuffer, x - 4, legend_y, w + 8, pill_h,
+                            UI_S(8), COLOR_LEGEND_BG);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT,
+                       x, text_y, sl, COLOR_LEGEND);
         anchor = x - spacing;
     }
 
@@ -242,9 +269,47 @@ void render_legend(uint16_t *framebuffer, int x_button_mode, int show_select, in
         const char *xs = " X-SEARCH ";
         int w = font_measure_text(xs);
         int x = anchor - w;
-        render_rounded_rect(framebuffer, x - 4, legend_y, w + 8, pill_h, UI_S(8), COLOR_LEGEND_BG);
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, x, text_y, xs, COLOR_LEGEND);
+        render_rounded_rect(framebuffer, x - 4, legend_y, w + 8, pill_h,
+                            UI_S(8), COLOR_LEGEND_BG);
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT,
+                       x, text_y, xs, COLOR_LEGEND);
     }
+}
+
+void render_scroll_indicator(uint16_t *framebuffer, int total, int selected, int visible) {
+    if (!framebuffer || total <= visible || visible <= 0) return;
+    int top = START_Y;
+    int bottom = SCREEN_HEIGHT - ITEM_HEIGHT - UI_S(10);
+    int h = bottom - top;
+    if (h < UI_S(20)) return;
+    int w = UI_S(3); if (w < 2) w = 2;
+    int x = SCREEN_WIDTH - UI_S(7) - w;
+    render_rounded_rect(framebuffer, x, top, w, h, w / 2, COLOR_LEGEND_BG);
+    int thumb_h = h * visible / total;
+    if (thumb_h < UI_S(12)) thumb_h = UI_S(12);
+    if (thumb_h > h) thumb_h = h;
+    int range = h - thumb_h;
+    int y = top + (total > 1 ? range * selected / (total - 1) : 0);
+    render_rounded_rect(framebuffer, x, y, w, thumb_h, w / 2, COLOR_SELECT_BG);
+}
+
+void render_toast(uint16_t *framebuffer, const char *text) {
+    if (!framebuffer || !text || !*text) return;
+    int pad = UI_S(10);
+    int w = font_measure_text(text) + pad * 2;
+    int max_w = SCREEN_WIDTH - PADDING * 2;
+    if (w > max_w) w = max_w;
+    int h = ITEM_HEIGHT - UI_S(3);
+    int x = (SCREEN_WIDTH - w) / 2;
+    int y = SCREEN_HEIGHT - ITEM_HEIGHT * 2 - UI_S(8);
+    render_rounded_rect(framebuffer, x, y, w, h, UI_S(8), COLOR_SELECT_BG);
+    int baseline, cap_h;
+    font_cap_metrics(&baseline, &cap_h);
+    int ty = y + h / 2 - (baseline - cap_h / 2);
+    int tx = (SCREEN_WIDTH - font_measure_text(text)) / 2;
+    if (tx < x + UI_S(4)) tx = x + UI_S(4);
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT,
+                   tx, ty, text, COLOR_SELECT_TEXT);
 }
 
 /* Draw one row at an explicit pixel y (used by the animated list). */
@@ -262,7 +327,7 @@ void render_menu_row(uint16_t *framebuffer, const char *name, int is_dir,
     if (is_selected) {
         render_text_pillbox(framebuffer, text_x, y, name, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
-        uint16_t text_color = is_dir ? COLOR_FOLDER : COLOR_TEXT;
+        uint16_t text_color = is_dir ? COLOR_FOLDER : COLOR_DISABLED;
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, text_x, y, name, text_color);
     }
 }
@@ -293,7 +358,7 @@ void render_menu_item_centered(uint16_t *framebuffer, int index, const char *nam
                             COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
     } else {
         font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, text_x, y, name,
-                       is_dir ? COLOR_FOLDER : COLOR_TEXT);
+                       is_dir ? COLOR_FOLDER : COLOR_DISABLED);
     }
 }
 
