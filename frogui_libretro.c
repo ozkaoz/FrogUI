@@ -356,11 +356,12 @@ static bool viewing_recents = false;
 static bool viewing_favourites = false;
 static bool game_switcher_fullscreen = false;
 enum { MAIN_TAB_RECENTS, MAIN_TAB_GAMES, MAIN_TAB_SETTINGS };
-#define VIEW_TRANSITION_FRAMES 8
+/* Keep view changes nearly immediate. Three blended frames provide a short,
+ * consistent crossfade without making tab navigation wait for a panel slide. */
+#define VIEW_TRANSITION_FRAMES 2
 static uint16_t *view_transition_old = NULL;
 static uint16_t *view_transition_out = NULL;
 static int view_transition_frame = VIEW_TRANSITION_FRAMES + 1;
-static int view_transition_direction = 1;
 static char ui_toast_text[96] = "";
 static int ui_toast_frames = 0;
 static void ui_toast_show(const char *text);
@@ -2159,13 +2160,13 @@ static void ui_menu_tick(void) {
 }
 
 static void ui_transition_start(int direction) {
+    (void)direction;
     if (!settings_anim || !framebuffer) return;
     size_t bytes = (size_t)SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(uint16_t);
     if (!view_transition_old) view_transition_old = malloc(bytes);
     if (!view_transition_out) view_transition_out = malloc(bytes);
     if (!view_transition_old || !view_transition_out) return;
     memcpy(view_transition_old, framebuffer, bytes);
-    view_transition_direction = direction < 0 ? -1 : 1;
     view_transition_frame = 0;
 }
 
@@ -2174,30 +2175,20 @@ static const uint16_t *ui_transition_compose(void) {
         !view_transition_old || !view_transition_out)
         return framebuffer;
 
-    float p = (float)view_transition_frame / VIEW_TRANSITION_FRAMES;
-    p = p * p * (3.0f - 2.0f * p);
-    int shift = (int)(p * SCREEN_WIDTH);
-    for (int y = 0; y < SCREEN_HEIGHT; y++) {
-        uint16_t *dst = view_transition_out + (size_t)y * SCREEN_WIDTH;
-        const uint16_t *old = view_transition_old + (size_t)y * SCREEN_WIDTH;
-        const uint16_t *now = framebuffer + (size_t)y * SCREEN_WIDTH;
-        /* The two panels remain edge-to-edge, so each row is two bulk copies.
-         * Avoid a per-pixel compositor on these small MIPS CPUs. */
-        if (view_transition_direction > 0) {
-            if (shift < SCREEN_WIDTH)
-                memcpy(dst, old + shift,
-                       (size_t)(SCREEN_WIDTH - shift) * sizeof(uint16_t));
-            if (shift > 0)
-                memcpy(dst + SCREEN_WIDTH - shift, now,
-                       (size_t)shift * sizeof(uint16_t));
-        } else {
-            if (shift > 0)
-                memcpy(dst, now + SCREEN_WIDTH - shift,
-                       (size_t)shift * sizeof(uint16_t));
-            if (shift < SCREEN_WIDTH)
-                memcpy(dst + shift, old,
-                       (size_t)(SCREEN_WIDTH - shift) * sizeof(uint16_t));
-        }
+    /* Blend at 25%, 50%, then 75% new view. Red/blue can be processed as one
+     * packed field; green is separate. The denominator is four, so the hot
+     * loop needs only multiplies, masks and a shift on the MIPS devices. */
+    unsigned new_weight = (unsigned)view_transition_frame + 1u;
+    unsigned old_weight = 4u - new_weight;
+    size_t pixels = (size_t)SCREEN_WIDTH * SCREEN_HEIGHT;
+    for (size_t i = 0; i < pixels; i++) {
+        uint32_t old = view_transition_old[i];
+        uint32_t now = framebuffer[i];
+        uint32_t rb = (((old & 0xf81fu) * old_weight +
+                        (now & 0xf81fu) * new_weight) >> 2) & 0xf81fu;
+        uint32_t g  = (((old & 0x07e0u) * old_weight +
+                        (now & 0x07e0u) * new_weight) >> 2) & 0x07e0u;
+        view_transition_out[i] = (uint16_t)(rb | g);
     }
     view_transition_frame++;
     return view_transition_out;
@@ -2950,13 +2941,11 @@ void retro_run(void) {
                            settings_theme_pack_idx != banner_last_pack ||
                            settings_background_dim != banner_last_dim);
         }
-        if (need_reload) {
-            /* GameSwitcher paints a full-panel cached capture. Decoding a
-             * Recents background here only delays entry and is never visible. */
-            if (viewing_recents && settings_game_switcher)
-                banner_clear();
-            else
-                load_banner_for_view(banner_path, viewing_recents, viewing_favourites);
+        if (need_reload && !(viewing_recents && settings_game_switcher)) {
+            /* GameSwitcher paints its own full panel. Leave the Games banner
+             * and its cache keys untouched while Recents is open, so returning
+             * to Games does not decode the same background from SD again. */
+            load_banner_for_view(banner_path, viewing_recents, viewing_favourites);
             banner_last_recents = viewing_recents;
             banner_last_favourites = viewing_favourites;
             banner_last_sel = selected_index;
@@ -3034,10 +3023,8 @@ void retro_run(void) {
     } else if (settings_menu_active) {
         render_settings_menu();
     } else if (viewing_recents && settings_game_switcher) {
-        if (banner_is_loaded())
-            banner_render(framebuffer);
-        else
-            render_clear_screen(framebuffer);
+        /* Do not paint or discard the cached Games banner behind GameSwitcher. */
+        render_clear_screen(framebuffer);
         render_game_switcher(framebuffer);
     } else {
         if (banner_is_loaded())
