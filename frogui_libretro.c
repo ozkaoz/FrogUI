@@ -564,6 +564,55 @@ static char theme_pack_disp[MAX_THEME_PACKS][FONT_STR_MAX];
 static int theme_pack_count = 1;
 static int settings_theme_pack_idx = 0;
 
+/* System View icon packs are independent from background packs. Pack 0 keeps
+ * frogui/system-icons; optional packs live in frogui/icon-packs/<folder>/. */
+#define MAX_ICON_PACKS 32
+static char icon_pack_files[MAX_ICON_PACKS][FONT_STR_MAX];
+static char icon_pack_disp[MAX_ICON_PACKS][FONT_STR_MAX];
+static int icon_pack_count = 1;
+static int settings_icon_pack_idx = 0;
+
+static void icon_pack_scan(void) {
+    icon_pack_count = 1;
+    strcpy(icon_pack_files[0], "");
+    strcpy(icon_pack_disp[0], "Default (Cosy)");
+    DIR *dp = opendir("/mnt/sdcard/frogui/icon-packs");
+    if (!dp) return;
+    struct dirent *e;
+    while ((e = readdir(dp)) && icon_pack_count < MAX_ICON_PACKS) {
+        if (e->d_name[0] == '.') continue;
+        if (e->d_type != DT_DIR) {
+            char full[512]; struct stat st;
+            snprintf(full, sizeof full, "/mnt/sdcard/frogui/icon-packs/%s", e->d_name);
+            if (stat(full, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        }
+        strncpy(icon_pack_files[icon_pack_count], e->d_name, FONT_STR_MAX - 1);
+        icon_pack_files[icon_pack_count][FONT_STR_MAX - 1] = '\0';
+        strncpy(icon_pack_disp[icon_pack_count], e->d_name, FONT_STR_MAX - 1);
+        icon_pack_disp[icon_pack_count][FONT_STR_MAX - 1] = '\0';
+        for (char *p = icon_pack_disp[icon_pack_count]; *p; p++)
+            if (*p == '_') *p = ' ';
+        icon_pack_count++;
+    }
+    closedir(dp);
+    /* Stable alphabetical menu; slot 0 stays the default. */
+    for (int i = 2; i < icon_pack_count; i++) {
+        char kf[FONT_STR_MAX], kd[FONT_STR_MAX];
+        strncpy(kf, icon_pack_files[i], FONT_STR_MAX);
+        strncpy(kd, icon_pack_disp[i], FONT_STR_MAX);
+        int j = i - 1;
+        while (j >= 1 && strcasecmp(icon_pack_disp[j], kd) > 0) {
+            strncpy(icon_pack_files[j + 1], icon_pack_files[j], FONT_STR_MAX);
+            strncpy(icon_pack_disp[j + 1], icon_pack_disp[j], FONT_STR_MAX);
+            j--;
+        }
+        strncpy(icon_pack_files[j + 1], kf, FONT_STR_MAX);
+        strncpy(icon_pack_disp[j + 1], kd, FONT_STR_MAX);
+    }
+    if (settings_icon_pack_idx < 0 || settings_icon_pack_idx >= icon_pack_count)
+        settings_icon_pack_idx = 0;
+}
+
 static void theme_pack_scan(void) {
     theme_pack_count = 1;
     strcpy(theme_pack_files[0], "");
@@ -682,7 +731,7 @@ static int settings_quick_resume = 0;      /* boot straight into last game: 0=of
 static int settings_autosave_autoload = 0; /* auto-save on pause/quit + auto-load on any game launch (boot or manual pick): 0=off, 1=on */
 static int settings_anim = 1;           /* UI animations: 0=off, 1=on */
 static int settings_menu_sounds = 0;    /* short navigation tick: 0=off, 1=on */
-enum { STYLE_VERTICAL, STYLE_HORIZONTAL, STYLE_COUNT };
+enum { STYLE_VERTICAL, STYLE_HORIZONTAL, STYLE_SYSTEM, STYLE_COUNT };
 static int settings_style = STYLE_VERTICAL;
 static int settings_center_text = 0;   /* center labels in the vertical system list */
 static int settings_friendly_names = 0; /* expand system folder codes in either style */
@@ -718,8 +767,8 @@ static int settings_disable_sleep = 1;  /* live-patch cubevol to disable power s
 static int settings_volume = 100;       /* global output volume 0..100 → cubegm/sndgain.txt */
 static const char *filter_names[] = {"nearest", "bilinear"};
 static const char *onoff_names[] = {"off", "on"};
-static const char *style_names[STYLE_COUNT] = {"Vertical", "Horizontal"};
-static const char *style_keys[STYLE_COUNT] = {"vertical", "horizontal"};
+static const char *style_names[STYLE_COUNT] = {"Vertical", "Horizontal", "System View"};
+static const char *style_keys[STYLE_COUNT] = {"vertical", "horizontal", "system"};
 #define FILTER_COUNT 2
 #define SETTINGS_BRIGHTNESS_STEP 5
 /* Filter option removed from the menu — always bilinear (HW path). */
@@ -729,7 +778,7 @@ static const char *style_keys[STYLE_COUNT] = {"vertical", "horizontal"};
  * adjust, and render code all iterate it. TOGGLE/RANGE point at their int; THEME
  * and FONT are special (dynamic option lists); ACTION opens the remap wizard. */
 typedef enum { RT_HEADER, RT_TOGGLE, RT_RANGE, RT_THEME, RT_STYLE, RT_FONT, RT_WALLPAPER,
-               RT_WALLFIT, RT_THEME_PACK, RT_CACHE_REBUILD, RT_ACTION } SRowType;
+               RT_WALLFIT, RT_THEME_PACK, RT_ICON_PACK, RT_CACHE_REBUILD, RT_ACTION } SRowType;
 typedef struct {
     SRowType type;
     const char *label;
@@ -741,6 +790,7 @@ static const SRow settings_rows[] = {
     { RT_HEADER, "APPEARANCE" },
     { RT_THEME,  "Theme" },
     { RT_STYLE,  "Style" },
+    { RT_ICON_PACK, "Icon Pack" },
     { RT_TOGGLE, "Center Text", &settings_center_text },
     { RT_TOGGLE, "Friendly System Names", &settings_friendly_names },
     { RT_FONT,   "Font" },
@@ -886,6 +936,11 @@ static void settings_load_file(void) {
             for (int i = 0; i < theme_pack_count; i++)
                 if (strcasecmp(theme_pack_files[i], val) == 0 ||
                     strcasecmp(theme_pack_disp[i], val) == 0) { settings_theme_pack_idx = i; break; }
+        } else if (strcmp(line, "icon_pack") == 0) {
+            settings_icon_pack_idx = 0;
+            for (int i = 1; i < icon_pack_count; i++)
+                if (strcasecmp(icon_pack_files[i], val) == 0 ||
+                    strcasecmp(icon_pack_disp[i], val) == 0) { settings_icon_pack_idx = i; break; }
         } else if (strcmp(line, "brightness") == 0) {
             settings_brightness = atoi(val);
         } else if (strcmp(line, "volume") == 0) {
@@ -955,6 +1010,8 @@ static void settings_save_file(void) {
     fprintf(f, "wallpaper_fit=%s\n", wallpaper_fit_names[settings_wallpaper_fit]);
     fprintf(f, "theme_pack=%s\n", settings_theme_pack_idx > 0 ?
             theme_pack_files[settings_theme_pack_idx] : "default");
+    fprintf(f, "icon_pack=%s\n", settings_icon_pack_idx > 0 ?
+            icon_pack_files[settings_icon_pack_idx] : "default");
     fprintf(f, "brightness=%d\n", settings_brightness);
     fprintf(f, "volume=%d\n", settings_volume);
     fprintf(f, "filter=%s\n", filter_names[settings_filter_idx]);
@@ -2077,6 +2134,9 @@ static void handle_settings_menu(void) {
         case RT_THEME_PACK:
             settings_theme_pack_idx = (settings_theme_pack_idx + delta + theme_pack_count) % theme_pack_count;
             break;
+        case RT_ICON_PACK:
+            settings_icon_pack_idx = (settings_icon_pack_idx + delta + icon_pack_count) % icon_pack_count;
+            break;
         case RT_TOGGLE:
             *r->val = (*r->val + delta + 2) % 2;
             break;
@@ -2128,6 +2188,12 @@ static void handle_settings_menu(void) {
 
 static bool horizontal_system_view(void) {
     return settings_style == STYLE_HORIZONTAL &&
+           strcmp(current_path, ROMS_PATH) == 0 &&
+           !viewing_recents && !viewing_favourites && !viewing_search;
+}
+
+static bool icon_system_view(void) {
+    return settings_style == STYLE_SYSTEM &&
            strcmp(current_path, ROMS_PATH) == 0 &&
            !viewing_recents && !viewing_favourites && !viewing_search;
 }
@@ -2293,6 +2359,242 @@ static void render_system_carousel(uint16_t *fb) {
 
     if (system_carousel_frame <= SYSTEM_CAROUSEL_FRAMES)
         system_carousel_frame++;
+}
+
+/* The system grid uses small cached icons independently from background packs.
+ * Optional artwork comes from icon-packs/<pack>/<rom-folder>.png; the shared
+ * frogui/system-icons folder is the fallback. A short LRU keeps SD reads out of
+ * normal navigation without retaining every system logo on low-memory devices. */
+#define SYSTEM_ICON_CACHE_N 12
+#define SYSTEM_ICON_MAX_W   160
+#define SYSTEM_ICON_MAX_H   160
+typedef struct {
+    char path[512];
+    uint16_t *pixels;
+    uint8_t *alpha;
+    int width, height;
+    uint8_t bright;
+    unsigned used;
+} SystemIcon;
+static SystemIcon system_icons[SYSTEM_ICON_CACHE_N];
+static unsigned system_icon_clock;
+static int system_icon_pack = -1;
+#define SYSTEM_ICON_MISSING_N 32
+static char system_icon_missing[SYSTEM_ICON_MISSING_N][512];
+static int system_icon_missing_count;
+
+static SystemIcon *system_icon_cached(const char *path) {
+    for (int i = 0; i < SYSTEM_ICON_CACHE_N; i++)
+        if (system_icons[i].pixels && strcmp(system_icons[i].path, path) == 0)
+            return &system_icons[i];
+    return NULL;
+}
+
+static const char *system_icon_path(const char *folder, char *path, size_t size) {
+    if (!folder || !*folder) return NULL;
+    const char *key = folder;
+    if (strcmp(folder, FAVOURITES_ENTRY_NAME) == 0) key = "favourites";
+    else if (strcmp(folder, RECENTS_ENTRY_NAME) == 0) key = "recents";
+    else if (strcmp(folder, SETTINGS_ENTRY_NAME) == 0) key = "settings";
+    if (settings_icon_pack_idx > 0 && settings_icon_pack_idx < icon_pack_count)
+        snprintf(path, size, BANNER_DIR "/icon-packs/%s/%s.png",
+                 icon_pack_files[settings_icon_pack_idx], key);
+    else
+        snprintf(path, size, BANNER_DIR "/system-icons/%s.png", key);
+    if (system_icon_cached(path)) return path;
+    for (int i = 0; i < system_icon_missing_count; i++)
+        if (strcmp(system_icon_missing[i], path) == 0) return NULL;
+    if (access(path, R_OK) == 0) return path;
+    if (system_icon_missing_count < SYSTEM_ICON_MISSING_N) {
+        strncpy(system_icon_missing[system_icon_missing_count], path, 511);
+        system_icon_missing[system_icon_missing_count][511] = '\0';
+        system_icon_missing_count++;
+    }
+    return NULL;
+}
+
+static SystemIcon *system_icon_get(const char *folder) {
+    if (system_icon_pack != settings_icon_pack_idx) {
+        for (int i = 0; i < SYSTEM_ICON_CACHE_N; i++) {
+            free(system_icons[i].pixels);
+            free(system_icons[i].alpha);
+            memset(&system_icons[i], 0, sizeof system_icons[i]);
+        }
+        system_icon_missing_count = 0;
+        system_icon_pack = settings_icon_pack_idx;
+    }
+    char path[512];
+    if (!system_icon_path(folder, path, sizeof path)) return NULL;
+    system_icon_clock++;
+    SystemIcon *cached = system_icon_cached(path);
+    if (cached) {
+        cached->used = system_icon_clock;
+        return cached;
+    }
+
+    int victim = 0;
+    for (int i = 1; i < SYSTEM_ICON_CACHE_N; i++)
+        if (!system_icons[i].pixels || system_icons[i].used < system_icons[victim].used)
+            victim = i;
+
+    int sw, sh, channels;
+    unsigned char *rgba = stbi_load(path, &sw, &sh, &channels, 4);
+    if (!rgba || sw <= 0 || sh <= 0) {
+        if (rgba) stbi_image_free(rgba);
+        return NULL;
+    }
+    int dw = sw, dh = sh;
+    if (dw > SYSTEM_ICON_MAX_W) { dh = dh * SYSTEM_ICON_MAX_W / dw; dw = SYSTEM_ICON_MAX_W; }
+    if (dh > SYSTEM_ICON_MAX_H) { dw = dw * SYSTEM_ICON_MAX_H / dh; dh = SYSTEM_ICON_MAX_H; }
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    uint16_t *pixels = malloc((size_t)dw * dh * sizeof(*pixels));
+    uint8_t *alpha = malloc((size_t)dw * dh);
+    if (!pixels || !alpha) {
+        free(pixels); free(alpha); stbi_image_free(rgba); return NULL;
+    }
+    unsigned visible_pixels = 0;
+    unsigned bright_pixels = 0;
+    for (int y = 0; y < dh; y++) {
+        int sy = y * sh / dh;
+        for (int x = 0; x < dw; x++) {
+            int sx = x * sw / dw;
+            const unsigned char *p = rgba + ((size_t)sy * sw + sx) * 4;
+            size_t dst = (size_t)y * dw + x;
+            pixels[dst] = (uint16_t)(((p[0] >> 3) << 11) |
+                                     ((p[1] >> 2) << 5) | (p[2] >> 3));
+            alpha[dst] = p[3];
+            /* Ignore transparent fringe pixels. A pack is considered bright
+             * when most of its visible glyph is pale enough to disappear on
+             * a light selection pill. */
+            if (p[3] >= 64) {
+                unsigned luma = (299u * p[0] + 587u * p[1] + 114u * p[2]) / 1000u;
+                visible_pixels++;
+                if (luma >= 184) bright_pixels++;
+            }
+        }
+    }
+    stbi_image_free(rgba);
+
+    free(system_icons[victim].pixels);
+    free(system_icons[victim].alpha);
+    system_icons[victim].pixels = pixels;
+    system_icons[victim].alpha = alpha;
+    system_icons[victim].width = dw;
+    system_icons[victim].height = dh;
+    system_icons[victim].bright = visible_pixels > 0 &&
+                                  bright_pixels * 100u >= visible_pixels * 60u;
+    system_icons[victim].used = system_icon_clock;
+    strncpy(system_icons[victim].path, path, sizeof system_icons[victim].path - 1);
+    system_icons[victim].path[sizeof system_icons[victim].path - 1] = '\0';
+    return &system_icons[victim];
+}
+
+static void system_icon_draw(uint16_t *fb, const SystemIcon *icon,
+                             int x, int y, int w, int h) {
+    if (!fb || !icon || !icon->pixels || !icon->alpha || w <= 0 || h <= 0) return;
+    int dw = w, dh = icon->height * w / icon->width;
+    if (dh > h) { dh = h; dw = icon->width * h / icon->height; }
+    if (dw < 1 || dh < 1) return;
+    int ox = x + (w - dw) / 2, oy = y + (h - dh) / 2;
+    for (int dy = 0; dy < dh; dy++) {
+        int sy = dy * icon->height / dh;
+        uint16_t *dst = fb + (size_t)(oy + dy) * SCREEN_WIDTH + ox;
+        for (int dx = 0; dx < dw; dx++) {
+            int sx = dx * icon->width / dw;
+            size_t src = (size_t)sy * icon->width + sx;
+            unsigned a = icon->alpha[src];
+            if (!a) continue;
+            uint16_t color = icon->pixels[src];
+            if (a == 255) { dst[dx] = color; continue; }
+            unsigned sr = (color >> 11) & 31, sg = (color >> 5) & 63, sb = color & 31;
+            unsigned dr = (dst[dx] >> 11) & 31, dg = (dst[dx] >> 5) & 63, db = dst[dx] & 31;
+            dst[dx] = (uint16_t)((((sr*a + dr*(255-a))/255) << 11) |
+                                 (((sg*a + dg*(255-a))/255) << 5) |
+                                  ((sb*a + db*(255-a))/255));
+        }
+    }
+}
+
+static void render_system_grid(uint16_t *fb) {
+    render_tabs(fb, MAIN_TAB_GAMES, COLOR_BG);
+    if (entry_count <= 0) {
+        render_legend(fb, LEGEND_X_NONE, 0, 1);
+        return;
+    }
+
+    enum { COLS = 4, ROWS = 2, PAGE_SIZE = COLS * ROWS };
+    int page = selected_index / PAGE_SIZE;
+    int pages = (entry_count + PAGE_SIZE - 1) / PAGE_SIZE;
+    int first = page * PAGE_SIZE;
+    int top = HEADER_HEIGHT + UI_S(8);
+    int bottom = SCREEN_HEIGHT - ITEM_HEIGHT - UI_S(25);
+    int grid_h = bottom - top;
+    int gap = UI_S(8);
+    int cell_w = (SCREEN_WIDTH - PADDING * 2 - gap * (COLS - 1)) / COLS;
+    int cell_h = (grid_h - gap * (ROWS - 1)) / ROWS;
+
+    for (int slot = 0; slot < PAGE_SIZE; slot++) {
+        int idx = first + slot;
+        if (idx >= entry_count) break;
+        int col = slot % COLS, row = slot / COLS;
+        int x = PADDING + col * (cell_w + gap);
+        int y = top + row * (cell_h + gap);
+        int active = idx == selected_index;
+
+        SystemIcon *icon = system_icon_get(entries[idx].name);
+        uint16_t tile_bg = COLOR_SELECT_BG;
+        uint16_t tile_text = COLOR_SELECT_TEXT;
+        if (active && icon && icon->bright) {
+            unsigned bg_r = ((tile_bg >> 11) & 31u) * 255u / 31u;
+            unsigned bg_g = ((tile_bg >> 5) & 63u) * 255u / 63u;
+            unsigned bg_b = (tile_bg & 31u) * 255u / 31u;
+            unsigned bg_luma = (299u * bg_r + 587u * bg_g + 114u * bg_b) / 1000u;
+            if (bg_luma >= 160u) {
+                /* Local contrast fix: invert only this selected system tile.
+                 * Menus, legends and every other themed pill stay unchanged. */
+                tile_bg = COLOR_SELECT_TEXT;
+                tile_text = COLOR_SELECT_BG;
+            }
+        }
+        if (active)
+            render_rounded_rect(fb, x, y, cell_w, cell_h, UI_S(10), tile_bg);
+
+        const char *shown = system_display_name(entries[idx].name);
+        char label[96];
+        fit_system_label(shown, label, sizeof label, cell_w - UI_S(12));
+        int label_w = font_measure_text(label);
+        int label_y = y + cell_h - ITEM_HEIGHT + UI_S(5);
+        if (icon) {
+            system_icon_draw(fb, icon, x + UI_S(12), y + UI_S(10),
+                             cell_w - UI_S(24), cell_h - ITEM_HEIGHT - UI_S(8));
+        } else {
+            /* Custom folders remain useful even without an icon pack entry. */
+            char initials[4] = {0};
+            initials[0] = shown[0] ? shown[0] : '?';
+            initials[1] = shown[1] ? shown[1] : '\0';
+            for (int i = 0; initials[i]; i++)
+                if (initials[i] >= 'a' && initials[i] <= 'z') initials[i] -= 32;
+            int iw = font_measure_text(initials);
+            font_draw_text(fb, SCREEN_WIDTH, SCREEN_HEIGHT,
+                           x + (cell_w - iw) / 2, y + cell_h / 2 - UI_S(8),
+                           initials, active ? tile_text : COLOR_TEXT);
+        }
+        font_draw_text(fb, SCREEN_WIDTH, SCREEN_HEIGHT,
+                       x + (cell_w - label_w) / 2, label_y, label,
+                       active ? tile_text : COLOR_TEXT);
+    }
+
+    char count[32];
+    snprintf(count, sizeof count, "%d / %d", page + 1, pages);
+    font_draw_text(fb, SCREEN_WIDTH, SCREEN_HEIGHT,
+                   (SCREEN_WIDTH - font_measure_text(count)) / 2,
+                   bottom + UI_S(4), count, COLOR_HEADER);
+    int show_select =
+        strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
+        strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
+        strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0;
+    render_legend(fb, LEGEND_X_NONE, show_select, 1);
 }
 
 static void handle_input(void) {
@@ -2541,6 +2843,29 @@ static void handle_input(void) {
             selected_index = (selected_index + 1) % entry_count;
             system_carousel_start(1);
         }
+    } else if (icon_system_view()) {
+        enum { GRID_COLS = 4 };
+        scroll_offset = 0;
+        if (input_repeat(FROG_BTN_LEFT) && entry_count > 0)
+            selected_index = (selected_index + entry_count - 1) % entry_count;
+        if (input_repeat(FROG_BTN_RIGHT) && entry_count > 0)
+            selected_index = (selected_index + 1) % entry_count;
+        if (input_repeat(FROG_BTN_UP) && entry_count > 0) {
+            int next = selected_index - GRID_COLS;
+            if (next < 0) {
+                int col = selected_index % GRID_COLS;
+                int last_row = (entry_count - 1) / GRID_COLS;
+                next = last_row * GRID_COLS + col;
+                if (next >= entry_count) next = entry_count - 1;
+            }
+            selected_index = next;
+        }
+        if (input_repeat(FROG_BTN_DOWN) && entry_count > 0) {
+            int next = selected_index + GRID_COLS;
+            if (next >= entry_count) next = selected_index % GRID_COLS;
+            if (next >= entry_count) next = entry_count - 1;
+            selected_index = next;
+        }
     } else {
         if (input_repeat(FROG_BTN_UP) && selected_index > 0) {
             selected_index--;
@@ -2641,6 +2966,8 @@ void retro_init(void) {
     dbg("wallpaper_scan done");
     theme_pack_scan();
     dbg("theme_pack_scan done");
+    icon_pack_scan();
+    dbg("icon_pack_scan done");
     theme_init();
     dbg("theme_init done");
     settings_load_file();
@@ -2687,6 +3014,14 @@ void retro_init(void) {
 }
 
 void retro_deinit(void) {
+    for (int i = 0; i < SYSTEM_ICON_CACHE_N; i++) {
+        free(system_icons[i].pixels);
+        free(system_icons[i].alpha);
+        system_icons[i].pixels = NULL;
+        system_icons[i].alpha = NULL;
+    }
+    system_icon_pack = -1;
+    system_icon_missing_count = 0;
     free(framebuffer); framebuffer = NULL;
     free(view_transition_old); view_transition_old = NULL;
     free(view_transition_out); view_transition_out = NULL;
@@ -2740,6 +3075,7 @@ static void render_settings_menu(void) {
         case RT_WALLPAPER: snprintf(line, sizeof line, "%s: < %s >", r->label, wallpaper_disp[settings_wallpaper_idx]); break;
         case RT_WALLFIT:   snprintf(line, sizeof line, "%s: < %s >", r->label, wallpaper_fit_names[settings_wallpaper_fit]); break;
         case RT_THEME_PACK: snprintf(line, sizeof line, "%s: < %s >", r->label, theme_pack_disp[settings_theme_pack_idx]); break;
+        case RT_ICON_PACK: snprintf(line, sizeof line, "%s: < %s >", r->label, icon_pack_disp[settings_icon_pack_idx]); break;
         case RT_TOGGLE: snprintf(line, sizeof line, "%s: < %s >", r->label, onoff_names[*r->val]); break;
         case RT_RANGE:  snprintf(line, sizeof line, "%s: < %d%% >", r->label, *r->val); break;
         default:        snprintf(line, sizeof line, "%s", r->label); break;   /* RT_ACTION */
@@ -2979,6 +3315,7 @@ void retro_run(void) {
             sig = sig*33u + (unsigned)settings_menu_idx;
             sig = sig*33u + (unsigned)settings_theme_idx;
             sig = sig*33u + (unsigned)settings_style;
+            sig = sig*33u + (unsigned)settings_icon_pack_idx;
             sig = sig*33u + (unsigned)settings_font_idx;
             sig = sig*33u + (unsigned)settings_wallpaper_idx;
             sig = sig*33u + (unsigned)settings_wallpaper_fit;
@@ -3033,6 +3370,8 @@ void retro_run(void) {
             render_clear_screen(framebuffer);
         if (horizontal_system_view()) {
             render_system_carousel(framebuffer);
+        } else if (icon_system_view()) {
+            render_system_grid(framebuffer);
         } else {
         static char search_title[96];
         const char *title;
