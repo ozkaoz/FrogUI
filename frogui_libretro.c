@@ -50,6 +50,7 @@ static char g_roms_path[64] = ROMS_PATH_DEFAULT;
 #define LGPT_BIN     SDCARD_BASE "/cubegm/lgpt"
 #define ROCKBOX_BIN  SDCARD_BASE "/cubegm/rockbox.sh"  /* wrapper sets HOME+SDL env */
 #define EBOOK_BIN    SDCARD_BASE "/cubegm/ebook"        /* MuPDF ebook reader (epub/mobi/pdf) */
+#define VIDEO_BIN    SDCARD_BASE "/cubegm/video_player" /* hardware-decoded video player */
 
 /* Console → core mapping (folder name → libretro .so)
  * Folder names match /mnt/sdcard/roms/ subdirectories (gb300_multicore convention). */
@@ -144,6 +145,8 @@ static const ConsoleMapping console_mappings[] = {
     {"rockbox", ROCKBOX_BIN},                        /* Rockbox music player (standalone) */
     {"Ebook",  EBOOK_BIN},                           /* ebook reader (epub/mobi/pdf, standalone) */
     {"ebook",  EBOOK_BIN},
+    {"videos", VIDEO_BIN},                          /* MP4/MKV/AVI/etc. (standalone) */
+    {"video",  VIDEO_BIN},
     {"fake08", CORES_PATH "/fake08_libretro.so"},   /* legacy folder name */
     {"lowres-nx", CORES_PATH "/lowresnx_libretro.so"},
     {"tic80",  CORES_PATH "/tic80_libretro.so"},   /* TIC-80 fantasy console (.tic carts) */
@@ -240,6 +243,15 @@ static const ExtensionMapping ext_mappings[] = {
     {".msa",  CORES_PATH "/castaway_libretro.so"},
     {".cue",  CORES_PATH "/pcsx_rearmed_libretro.so"},
     {".iso",  CORES_PATH "/pcsx_rearmed_libretro.so"},
+    {".mp4",  VIDEO_BIN},
+    {".mkv",  VIDEO_BIN},
+    {".avi",  VIDEO_BIN},
+    {".mov",  VIDEO_BIN},
+    {".m4v",  VIDEO_BIN},
+    {".mpg",  VIDEO_BIN},
+    {".mpeg", VIDEO_BIN},
+    {".ts",   VIDEO_BIN},
+    {".webm", VIDEO_BIN},
     {NULL, NULL}
 };
 
@@ -1839,6 +1851,7 @@ static void request_game_launch(const char *core_path, const char *rom_path) {
 static void request_standalone_launch(const char *bin_path, const char *rom_path) {
     dbg("standalone_launch: start");
     fb1_clear_all();
+    write_picoarch_skin();
     FILE *f = fopen(LAUNCH_FILE, "w");
     if (!f) { dbg("standalone_launch: fopen failed"); return; }
     fprintf(f, "standalone\n%s\n%s\n", bin_path, rom_path);
@@ -1879,7 +1892,8 @@ static bool is_standalone_bin(const char *name) {
                     strcmp(name, PICO286_BIN)  == 0 ||
                     strcmp(name, LGPT_BIN)     == 0 ||
                     strcmp(name, ROCKBOX_BIN)  == 0 ||
-                    strcmp(name, EBOOK_BIN)    == 0);
+                    strcmp(name, EBOOK_BIN)    == 0 ||
+                    strcmp(name, VIDEO_BIN)    == 0);
 }
 
 /* ----------------------------- Search (X button) ----------------------------- */
@@ -2618,9 +2632,8 @@ static void handle_input(void) {
         return;
     }
 
-    /* Top-level tabs. Shoulders are always unambiguous. D-pad Left/Right also
-     * switches tabs on the vertical Games root; horizontal Games, Settings,
-     * and GameSwitcher retain those directions for their existing controls. */
+    /* Top-level tabs use shoulders only. D-pad Left/Right belongs to the
+     * current view (including Vertical) and must never change tabs. */
     {
         int tab = main_tab_active();
         bool at_tabs = settings_menu_active || viewing_recents ||
@@ -2628,10 +2641,6 @@ static void handle_input(void) {
                         strcmp(current_path, ROMS_PATH) == 0);
         bool prev = input_was_pressed(FROG_BTN_L1);
         bool next = input_was_pressed(FROG_BTN_R1);
-        if (at_tabs && tab == MAIN_TAB_GAMES && settings_style == STYLE_VERTICAL) {
-            prev = prev || input_was_pressed(FROG_BTN_LEFT);
-            next = next || input_was_pressed(FROG_BTN_RIGHT);
-        }
         if (at_tabs && prev && tab > MAIN_TAB_RECENTS) {
             switch_main_tab(tab - 1);
             return;
