@@ -51,6 +51,7 @@ static char g_roms_path[64] = ROMS_PATH_DEFAULT;
 #define ROCKBOX_BIN  SDCARD_BASE "/cubegm/rockbox.sh"  /* wrapper sets HOME+SDL env */
 #define EBOOK_BIN    SDCARD_BASE "/cubegm/ebook"        /* MuPDF ebook reader (epub/mobi/pdf) */
 #define VIDEO_BIN    SDCARD_BASE "/cubegm/video_player" /* hardware-decoded video player */
+#define IMAGE_BIN    SDCARD_BASE "/cubegm/image_viewer" /* hardware-decoded image viewer */
 
 /* Console → core mapping (folder name → libretro .so)
  * Folder names match /mnt/sdcard/roms/ subdirectories (gb300_multicore convention). */
@@ -147,6 +148,8 @@ static const ConsoleMapping console_mappings[] = {
     {"ebook",  EBOOK_BIN},
     {"videos", VIDEO_BIN},                          /* MP4/MKV/AVI/etc. (standalone) */
     {"video",  VIDEO_BIN},
+    {"images", IMAGE_BIN},                          /* JPG/PNG/BMP/GIF/etc. (standalone) */
+    {"photos", IMAGE_BIN},
     {"fake08", CORES_PATH "/fake08_libretro.so"},   /* legacy folder name */
     {"lowres-nx", CORES_PATH "/lowresnx_libretro.so"},
     {"tic80",  CORES_PATH "/tic80_libretro.so"},   /* TIC-80 fantasy console (.tic carts) */
@@ -252,6 +255,18 @@ static const ExtensionMapping ext_mappings[] = {
     {".mpeg", VIDEO_BIN},
     {".ts",   VIDEO_BIN},
     {".webm", VIDEO_BIN},
+    {".jpg",  IMAGE_BIN},
+    {".jpe",  IMAGE_BIN},
+    {".jpeg", IMAGE_BIN},
+    {".png",  IMAGE_BIN},
+    {".bmp",  IMAGE_BIN},
+    {".gif",  IMAGE_BIN},
+    {".tga",  IMAGE_BIN},
+    {".targa",IMAGE_BIN},
+    {".ico",  IMAGE_BIN},
+    {".webp", IMAGE_BIN},
+    {".tif",  IMAGE_BIN},
+    {".tiff", IMAGE_BIN},
     {NULL, NULL}
 };
 
@@ -1078,6 +1093,15 @@ static const char* get_console_folder(const char *path) {
     return NULL;
 }
 
+/* JPG/PNG normally mean frontend artwork and stay hidden from ROM listings.
+ * Inside the dedicated image libraries they are content, including in nested
+ * album/comic folders, so those paths must opt out of the artwork filter. */
+static int is_image_library_path(const char *path) {
+    const char *folder = get_console_folder(path);
+    return folder && (!strcasecmp(folder, "images") ||
+                      !strcasecmp(folder, "photos"));
+}
+
 #define SETTINGS_ENTRY_NAME    ">> Settings"
 #define RECENTS_ENTRY_NAME     ">> Recents"
 #define FAVOURITES_ENTRY_NAME  ">> Favourites"
@@ -1241,7 +1265,7 @@ static int folder_has_games(const char *path, int depth) {
             size_t nlen = strlen(e->d_name);
             int is_p8png = nlen >= 7 && strcasecmp(e->d_name + nlen - 7, ".p8.png") == 0;
             const char *ext = strrchr(e->d_name, '.');
-            if (ext && !is_p8png &&
+            if (ext && !is_p8png && !is_image_library_path(path) &&
                 (strcasecmp(ext,".csv")==0 || strcasecmp(ext,".txt")==0 ||
                  strcasecmp(ext,".xml")==0 || strcasecmp(ext,".jpg")==0 ||
                  strcasecmp(ext,".png")==0)) continue;
@@ -1376,7 +1400,7 @@ static void scan_directory(const char *path) {
      * listing from disk and skip readdir/stat/empty-check/sort entirely. */
     struct stat dst;
     int have_mtime = (stat(path, &dst) == 0);
-    int cached = settings_file_cache && have_mtime &&
+    int cached = settings_file_cache && !is_image_library_path(path) && have_mtime &&
                  cache_load(path, (uint64_t)dst.st_mtime, at_root);
 
     if (!cached) {
@@ -1391,7 +1415,7 @@ static void scan_directory(const char *path) {
                 /* PICO-8 carts are .p8.png — keep them; only skip plain .png artwork. */
                 size_t nlen = strlen(e->d_name);
                 int is_p8png = nlen >= 7 && strcasecmp(e->d_name + nlen - 7, ".p8.png") == 0;
-                if (ext && !is_p8png &&
+                if (ext && !is_p8png && !is_image_library_path(path) &&
                            (strcasecmp(ext,".csv")==0 || strcasecmp(ext,".txt")==0 ||
                             strcasecmp(ext,".xml")==0 || strcasecmp(ext,".jpg")==0 ||
                             strcasecmp(ext,".png")==0)) continue;
@@ -1893,7 +1917,8 @@ static bool is_standalone_bin(const char *name) {
                     strcmp(name, LGPT_BIN)     == 0 ||
                     strcmp(name, ROCKBOX_BIN)  == 0 ||
                     strcmp(name, EBOOK_BIN)    == 0 ||
-                    strcmp(name, VIDEO_BIN)    == 0);
+                    strcmp(name, VIDEO_BIN)    == 0 ||
+                    strcmp(name, IMAGE_BIN)    == 0);
 }
 
 /* ----------------------------- Search (X button) ----------------------------- */
