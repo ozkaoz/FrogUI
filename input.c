@@ -10,6 +10,7 @@
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <sys/time.h>
 #include "input.h"
 
 static volatile uint32_t *cubevol_keys = NULL;
@@ -86,7 +87,7 @@ void input_deinit(void) {
  * anywhere). In games that's fine (stick acts like the buttons), but in menus the
  * stick's drift and accidental brushes fire false A/B/X/Y. We can't tell a real
  * press from the stick (same bits), so we debounce: a face bit must stay set for
- * FACE_HOLD consecutive frames before it registers. Drift glances and quick
+ * a short, fixed time before it registers. Drift glances and quick
  * brushes (shorter than that) are dropped; a deliberate tap/hold passes with a
  * small latency. Release clears instantly. Dpad and the rest stay instant.
  * This runs only in the FrogUI menu (games read the shm directly), so in-game
@@ -95,12 +96,13 @@ void input_deinit(void) {
  * via input_set_ext_raw — this is picoarch's ALREADY-debounced input. */
 static uint32_t ext_raw = 0;
 
-#define FACE_BITS 0xF000u
-#define FACE_HOLD 4   /* frames (~65ms @ 60fps) a face bit must be held to count */
-#define NAV_HOLD  1   /* dpad/shoulders/start/select: register next frame (~16ms) so
-                       * the initial press is snappy. rkgame is killed on R36SX so
-                       * the old two-writer ghosting is gone; a 1-frame filter still
-                       * drops instantaneous glitches. Bump to 2 if ghosting returns. */
+#define FACE_BITS    0xF000u
+#define FACE_HOLD_MS 65   /* stable duration required for A/B/X/Y */
+
+static long input_now_ms(void) {
+    struct timeval t; gettimeofday(&t, NULL);
+    return (long)t.tv_sec * 1000 + t.tv_usec / 1000;
+}
 
 void input_update(void) {
     /* Combine the raw joy_key shm with ext_raw (picoarch's ALREADY-debounced input
@@ -108,19 +110,27 @@ void input_update(void) {
      * race → ghost menu inputs; ORing+debouncing below removes that. */
     uint32_t raw = (cubevol_keys ? (*cubevol_keys & 0xFFFF) : 0) | (ext_raw & 0xFFFF);
 
-    /* Per-bit hold debounce on ALL 16 bits (was face-only — that left dpad ghosting).
-     * Face bits hold longer (stick drift); the rest use NAV_HOLD. Release clears
-     * instantly so let-go stays snappy. */
-    static uint8_t cnt[16] = {0};
+    /* Debounce face bits by ELAPSED TIME, not update count. The redraw-on-demand
+     * UI polls near 1kHz between presented frames, so the old 4-update debounce
+     * shrank from its intended ~65ms to ~4ms. That allowed the right stick's
+     * merged X-bit glitches to open Search while a game list was scrolling.
+     * Navigation stays immediate; release always clears immediately. */
+    static long down_since[16] = {0};
+    static uint32_t raw_down = 0;
     static uint32_t committed = 0;
+    long now = input_now_ms();
     for (int b = 0; b < 16; b++) {
         uint32_t m = 1u << b;
-        int hold = (m & FACE_BITS) ? FACE_HOLD : NAV_HOLD;
         if (raw & m) {
-            if (cnt[b] < 255) cnt[b]++;
-            if (cnt[b] >= hold) committed |= m;
+            if (!(raw_down & m)) {
+                raw_down |= m;
+                down_since[b] = now;
+            }
+            if (!(m & FACE_BITS) || now - down_since[b] >= FACE_HOLD_MS)
+                committed |= m;
         } else {
-            cnt[b] = 0;
+            raw_down &= ~m;
+            down_since[b] = 0;
             committed &= ~m;
         }
     }
@@ -146,13 +156,8 @@ bool input_was_pressed(FrogButton btn) {
 /* Auto-repeat for menu navigation: fires on the initial press, then (after a
  * short delay) repeatedly while held. TIME-based (ms), so the repeat rate is the
  * same regardless of frame rate - no more one-tap-per-item scrolling. */
-#include <sys/time.h>
 #define REPEAT_DELAY_MS 300   /* hold this long before repeating */
 #define REPEAT_RATE_MS  70    /* then one step every this many ms */
-static long input_now_ms(void) {
-    struct timeval t; gettimeofday(&t, NULL);
-    return (long)t.tv_sec * 1000 + t.tv_usec / 1000;
-}
 bool input_repeat(FrogButton btn) {
     static long hold_start[32], last_rep[32];
     int held = (current_state >> btn) & 1;
