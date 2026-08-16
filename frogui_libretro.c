@@ -148,6 +148,8 @@ static const ConsoleMapping console_mappings[] = {
     {"ebook",  EBOOK_BIN},
     {"videos", VIDEO_BIN},                          /* MP4/MKV/AVI/etc. (standalone) */
     {"video",  VIDEO_BIN},
+    {"music",  VIDEO_BIN},                          /* MP3/etc. in simple hardware player */
+    {"audio",  VIDEO_BIN},
     {"images", IMAGE_BIN},                          /* JPG/PNG/BMP/GIF/etc. (standalone) */
     {"photos", IMAGE_BIN},
     {"fake08", CORES_PATH "/fake08_libretro.so"},   /* legacy folder name */
@@ -255,6 +257,13 @@ static const ExtensionMapping ext_mappings[] = {
     {".mpeg", VIDEO_BIN},
     {".ts",   VIDEO_BIN},
     {".webm", VIDEO_BIN},
+    {".mp3",  VIDEO_BIN},
+    {".m4a",  VIDEO_BIN},
+    {".aac",  VIDEO_BIN},
+    {".wav",  VIDEO_BIN},
+    {".flac", VIDEO_BIN},
+    {".ogg",  VIDEO_BIN},
+    {".opus", VIDEO_BIN},
     {".jpg",  IMAGE_BIN},
     {".jpe",  IMAGE_BIN},
     {".jpeg", IMAGE_BIN},
@@ -1159,7 +1168,9 @@ static const SystemLabel system_labels[] = {
     {"chip8", "CHIP-8"}, {"arduboy", "Arduboy"},
     {"arduous", "Arduboy - Accurate"}, {"vec", "Vectrex"},
     {"o2em", "Odyssey 2"}, {"gme", "Game Music"},
-    {"gong", "Pong"}, {"vapor", "VaporSpec"}, {"rockbox", "Music"}
+    {"gong", "Pong"}, {"vapor", "VaporSpec"}, {"rockbox", "Rockbox"},
+    {"music", "Music"}, {"audio", "Music"}, {"videos", "Videos"},
+    {"video", "Videos"}, {"images", "Images"}, {"photos", "Images"}
 };
 
 static const char *system_display_name(const char *folder) {
