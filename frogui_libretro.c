@@ -148,8 +148,8 @@ static const ConsoleMapping console_mappings[] = {
     {"ebook",  EBOOK_BIN},
     {"videos", VIDEO_BIN},                          /* MP4/MKV/AVI/etc. (standalone) */
     {"video",  VIDEO_BIN},
-    {"music",  VIDEO_BIN},                          /* MP3/etc. in simple hardware player */
-    {"audio",  VIDEO_BIN},
+    {"music",  ROCKBOX_BIN},                        /* MP3/etc. in Rockbox */
+    {"audio",  ROCKBOX_BIN},
     {"images", IMAGE_BIN},                          /* JPG/PNG/BMP/GIF/etc. (standalone) */
     {"photos", IMAGE_BIN},
     {"fake08", CORES_PATH "/fake08_libretro.so"},   /* legacy folder name */
@@ -390,14 +390,18 @@ static uint16_t *framebuffer = NULL;
 static bool shutdown_requested = false;
 static bool viewing_recents = false;
 static bool viewing_favourites = false;
+static bool viewing_apps = false;
+static bool apps_browsing = false;
+static char apps_root_path[MAX_PATH_LEN] = "";
 static bool game_switcher_fullscreen = false;
-enum { MAIN_TAB_RECENTS, MAIN_TAB_GAMES, MAIN_TAB_SETTINGS };
+enum { MAIN_TAB_RECENTS, MAIN_TAB_GAMES, MAIN_TAB_APPS, MAIN_TAB_SETTINGS };
 /* Keep view changes nearly immediate. Three blended frames provide a short,
  * consistent crossfade without making tab navigation wait for a panel slide. */
 #define VIEW_TRANSITION_FRAMES 2
 static uint16_t *view_transition_old = NULL;
 static uint16_t *view_transition_out = NULL;
 static int view_transition_frame = VIEW_TRANSITION_FRAMES + 1;
+static int is_app_folder_name(const char *name);
 static char ui_toast_text[96] = "";
 static int ui_toast_frames = 0;
 static void ui_toast_show(const char *text);
@@ -1169,7 +1173,7 @@ static const SystemLabel system_labels[] = {
     {"arduous", "Arduboy - Accurate"}, {"vec", "Vectrex"},
     {"o2em", "Odyssey 2"}, {"gme", "Game Music"},
     {"gong", "Pong"}, {"vapor", "VaporSpec"}, {"rockbox", "Rockbox"},
-    {"music", "Music"}, {"audio", "Music"}, {"videos", "Videos"},
+    {"music", "Rockbox"}, {"audio", "Rockbox"}, {"videos", "Videos"},
     {"video", "Videos"}, {"images", "Images"}, {"photos", "Images"}
 };
 
@@ -1433,6 +1437,8 @@ static void scan_directory(const char *path) {
             }
             /* Always hide the internal "menu" folder at the root. */
             if (isdir && at_root && strcasecmp(e->d_name, "menu") == 0) continue;
+            /* Media libraries live under Apps, not in the Games tab. */
+            if (isdir && at_root && is_app_folder_name(e->d_name)) continue;
             /* Hide-empty-folders: at the root, skip rom folders with no games.
              * Only reached for the handful of root folders, never per-ROM. */
             if (isdir && settings_hide_empty && at_root) {
@@ -1459,6 +1465,19 @@ static void scan_directory(const char *path) {
         if (settings_file_cache && have_mtime)
             cache_store(path, (uint64_t)dst.st_mtime, at_root);
     }
+    /* Cached roots may predate the Apps split; apply the same exclusions after
+     * loading a cache so media folders never leak back into Games. */
+    if (at_root && entry_count > 0) {
+        int write = 0;
+        for (int read = 0; read < entry_count; read++) {
+            if (entries[read].is_dir &&
+                (strcasecmp(entries[read].name, "menu") == 0 ||
+                 is_app_folder_name(entries[read].name))) continue;
+            if (write != read) entries[write] = entries[read];
+            write++;
+        }
+        entry_count = write;
+    }
     /* Favourites remains part of the Games library. Recents and Settings are
      * real top-level tabs and must never appear as fake system folders. */
     if (strcmp(path, ROMS_PATH) == 0) {
@@ -1481,6 +1500,7 @@ done:
     if (!entries) entry_count = 0;   /* belt: renderer must never walk NULL */
     viewing_recents = false;
     viewing_favourites = false;
+    viewing_apps = false;
     selected_index = 0;
     scroll_offset  = 0;
 }
@@ -1738,8 +1758,72 @@ static void enter_recents_view(void) {
 
 static int games_tab_selected = 0, games_tab_scroll = 0;
 static int recents_tab_selected = 0;
+static int apps_tab_selected = 0;
 static DirEntry *games_tab_entries = NULL;
 static int games_tab_entry_count = 0;
+
+/* Apps are virtual top-level entries. The on-card folder names remain stable
+ * for compatibility, while the Apps tab presents friendly names and hides
+ * media folders from the Games library. */
+typedef struct { const char *key; const char *label; const char *folder_a; const char *folder_b; } AppEntry;
+static const AppEntry app_defs[] = {
+    {"rockbox", "Rockbox", "rockbox", "music"},
+    {"videos",  "Videos",  "videos",  "video"},
+};
+
+static const char *app_folder_path(int index, char *out, size_t out_size) {
+    if (index < 0 || index >= (int)(sizeof(app_defs) / sizeof(app_defs[0]))) return NULL;
+    const AppEntry *a = &app_defs[index];
+    const char *candidates[3] = { a->folder_a, a->folder_b, NULL };
+    if (index == 0) candidates[2] = "audio";
+    for (int i = 0; candidates[i]; i++) {
+        snprintf(out, out_size, "%s/%s", ROMS_PATH, candidates[i]);
+        struct stat st;
+        if (stat(out, &st) == 0 && S_ISDIR(st.st_mode)) return out;
+    }
+    return NULL;
+}
+
+static int is_app_folder_name(const char *name) {
+    return name && (!strcasecmp(name, "rockbox") || !strcasecmp(name, "music") ||
+                    !strcasecmp(name, "audio") || !strcasecmp(name, "videos") ||
+                    !strcasecmp(name, "video"));
+}
+
+static void scan_apps_tab(void) {
+    strncpy(current_path, ROMS_PATH, MAX_PATH_LEN - 1);
+    current_path[MAX_PATH_LEN - 1] = '\0';
+    apps_root_path[0] = '\0';
+    entry_count = 0;
+    for (int i = 0; i < (int)(sizeof(app_defs) / sizeof(app_defs[0])); i++) {
+        char path[MAX_PATH_LEN];
+        if (!app_folder_path(i, path, sizeof path)) continue;
+        if (entry_count >= entry_capacity) {
+            entry_capacity = entry_capacity ? entry_capacity * 2 : INITIAL_ENTRIES_CAPACITY;
+            entries = realloc(entries, (size_t)entry_capacity * sizeof(*entries));
+            if (!entries) { entry_count = 0; return; }
+        }
+        strncpy(entries[entry_count].name, app_defs[i].key, sizeof(entries[entry_count].name) - 1);
+        entries[entry_count].name[sizeof(entries[entry_count].name) - 1] = '\0';
+        entries[entry_count].is_dir = 1;
+        entry_count++;
+    }
+    viewing_apps = true;
+    apps_browsing = false;
+    viewing_recents = false;
+    viewing_favourites = false;
+    viewing_search = false;
+    selected_index = apps_tab_selected;
+    if (selected_index >= entry_count) selected_index = entry_count > 0 ? entry_count - 1 : 0;
+    if (selected_index < 0) selected_index = 0;
+    scroll_offset = 0;
+}
+
+static const char *app_label(const char *key) {
+    for (size_t i = 0; i < sizeof(app_defs) / sizeof(app_defs[0]); i++)
+        if (strcasecmp(key, app_defs[i].key) == 0) return app_defs[i].label;
+    return key;
+}
 
 static void save_games_tab_entries(void) {
     if (!entries || entry_count <= 0) {
@@ -1775,6 +1859,7 @@ static int restore_games_tab_entries(void) {
 static int main_tab_active(void) {
     if (settings_menu_active) return MAIN_TAB_SETTINGS;
     if (viewing_recents) return MAIN_TAB_RECENTS;
+    if (viewing_apps || apps_browsing) return MAIN_TAB_APPS;
     return MAIN_TAB_GAMES;
 }
 
@@ -1790,6 +1875,8 @@ static void switch_main_tab(int target) {
         save_games_tab_entries();
     } else if (old == MAIN_TAB_RECENTS) {
         recents_tab_selected = selected_index;
+    } else if (old == MAIN_TAB_APPS) {
+        apps_tab_selected = selected_index;
     } else {
         settings_save_file();
         settings_menu_active = false;
@@ -1797,6 +1884,8 @@ static void switch_main_tab(int target) {
 
     if (target == MAIN_TAB_RECENTS) {
         settings_menu_active = false;
+        viewing_apps = false;
+        apps_browsing = false;
         viewing_favourites = false;
         viewing_search = false;
         enter_recents_view();
@@ -1809,6 +1898,8 @@ static void switch_main_tab(int target) {
         settings_menu_active = false;
         viewing_recents = false;
         viewing_favourites = false;
+        viewing_apps = false;
+        apps_browsing = false;
         viewing_search = false;
         strncpy(current_path, ROMS_PATH, MAX_PATH_LEN - 1);
         current_path[MAX_PATH_LEN - 1] = '\0';
@@ -1822,9 +1913,19 @@ static void switch_main_tab(int target) {
             if (scroll_offset > selected_index) scroll_offset = selected_index;
             if (scroll_offset < 0) scroll_offset = 0;
         }
+    } else if (target == MAIN_TAB_APPS) {
+        settings_menu_active = false;
+        scan_apps_tab();
+        if (entry_count > 0) {
+            selected_index = apps_tab_selected;
+            if (selected_index >= entry_count) selected_index = entry_count - 1;
+            if (selected_index < 0) selected_index = 0;
+        }
     } else {
         viewing_recents = false;
         viewing_favourites = false;
+        viewing_apps = false;
+        apps_browsing = false;
         viewing_search = false;
         settings_menu_active = true;
         if (!settings_row_selectable(settings_menu_idx)) {
@@ -1899,8 +2000,14 @@ static void request_standalone_launch(const char *bin_path, const char *rom_path
     game_name[sizeof(game_name) - 1] = '\0';
     char *dot = strrchr(game_name, '.');
     if (dot) *dot = '\0';
-    dbg("standalone_launch: calling recent_games_add");
-    recent_games_add(bin_path, game_name, rom_path);
+    /* Media playback is an app, not a game: keep MP3/video launches out of
+     * Recents so that list remains useful for actual games. */
+    if (strcmp(bin_path, ROCKBOX_BIN) != 0 && strcmp(bin_path, VIDEO_BIN) != 0) {
+        dbg("standalone_launch: calling recent_games_add");
+        recent_games_add(bin_path, game_name, rom_path);
+    } else {
+        dbg("standalone_launch: media app, skipping recents");
+    }
     dbg("standalone_launch: calling environ_cb SHUTDOWN");
     if (environ_cb) environ_cb(RETRO_ENVIRONMENT_SHUTDOWN, NULL);
     dbg("standalone_launch: after environ_cb");
@@ -2239,13 +2346,15 @@ static void handle_settings_menu(void) {
 static bool horizontal_system_view(void) {
     return settings_style == STYLE_HORIZONTAL &&
            strcmp(current_path, ROMS_PATH) == 0 &&
-           !viewing_recents && !viewing_favourites && !viewing_search;
+           !viewing_recents && !viewing_favourites && !viewing_apps &&
+           !apps_browsing && !viewing_search;
 }
 
 static bool icon_system_view(void) {
     return settings_style == STYLE_SYSTEM &&
            strcmp(current_path, ROMS_PATH) == 0 &&
-           !viewing_recents && !viewing_favourites && !viewing_search;
+           !viewing_recents && !viewing_favourites && !viewing_apps &&
+           !apps_browsing && !viewing_search;
 }
 
 static void ui_toast_show(const char *text) {
@@ -2672,7 +2781,7 @@ static void handle_input(void) {
      * current view (including Vertical) and must never change tabs. */
     {
         int tab = main_tab_active();
-        bool at_tabs = settings_menu_active || viewing_recents ||
+        bool at_tabs = settings_menu_active || viewing_recents || viewing_apps || apps_browsing ||
                        (!viewing_favourites && !viewing_search &&
                         strcmp(current_path, ROMS_PATH) == 0);
         bool prev = input_was_pressed(FROG_BTN_L1);
@@ -2799,6 +2908,24 @@ static void handle_input(void) {
             int rc = recent_games_get_count();
             if (selected_index < rc)
                 launch_by_path(rg[selected_index].full_path);
+        } else if (viewing_apps) {
+            /* Apps entries are virtual aliases for the on-card media folders. */
+            char app_path[MAX_PATH_LEN];
+            int app_index = -1;
+            if (selected_index < entry_count) {
+                for (int ai = 0; ai < (int)(sizeof(app_defs) / sizeof(app_defs[0])); ai++)
+                    if (strcmp(entries[selected_index].name, app_defs[ai].key) == 0) { app_index = ai; break; }
+            }
+            if (app_index >= 0 && app_folder_path(app_index, app_path, sizeof app_path)) {
+                ui_transition_start(1);
+                strncpy(current_path, app_path, MAX_PATH_LEN - 1);
+                current_path[MAX_PATH_LEN - 1] = '\0';
+                strncpy(apps_root_path, app_path, MAX_PATH_LEN - 1);
+                apps_root_path[MAX_PATH_LEN - 1] = '\0';
+                viewing_apps = false;
+                scan_directory(current_path);
+                apps_browsing = true;
+            }
         } else if (strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) == 0) {
             /* Enter favourites view */
             ui_transition_start(1);
@@ -2848,6 +2975,13 @@ static void handle_input(void) {
             search_kbd_active = true;
         } else if (viewing_recents) {
             switch_main_tab(MAIN_TAB_GAMES);
+            return;
+        } else if (apps_browsing && strcmp(current_path, apps_root_path) == 0) {
+            /* Return from a media folder to the Apps tab, not the Games root. */
+            ui_transition_start(-1);
+            strncpy(current_path, ROMS_PATH, MAX_PATH_LEN - 1);
+            current_path[MAX_PATH_LEN - 1] = '\0';
+            scan_apps_tab();
             return;
         } else if (viewing_favourites) {
             ui_transition_start(-1);
@@ -3425,12 +3559,15 @@ void retro_run(void) {
             title = search_title;
         } else {
             title = viewing_recents    ? "RECENT GAMES" :
+                    viewing_apps       ? "APPS" :
                     viewing_favourites ? "FAVOURITES" :
                     (strcmp(current_path, ROMS_PATH) == 0)
                     ? "TREEFROGUI: SYSTEMS" : system_display_name(get_basename(current_path));
         }
         if (viewing_recents)
             render_tabs(framebuffer, MAIN_TAB_RECENTS, COLOR_BG);
+        else if (viewing_apps)
+            render_tabs(framebuffer, MAIN_TAB_APPS, COLOR_BG);
         else if (strcmp(current_path, ROMS_PATH) == 0 && !viewing_favourites && !viewing_search)
             render_tabs(framebuffer, MAIN_TAB_GAMES, COLOR_BG);
         else
@@ -3441,7 +3578,9 @@ void retro_run(void) {
                 int idx = scroll_offset + i;
                 const char *shown = entries[idx].name;
                 char disp[256];
-                if (entries[idx].is_dir && strcmp(current_path, ROMS_PATH) == 0)
+                if (viewing_apps && entries[idx].is_dir)
+                    shown = app_label(entries[idx].name);
+                else if (entries[idx].is_dir && strcmp(current_path, ROMS_PATH) == 0)
                     shown = system_display_name(entries[idx].name);
                 /* Hide file extension (.gb/.gba/...) when enabled — display only,
                  * the real name in entries[] is still used to launch. Files only. */

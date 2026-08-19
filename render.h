@@ -81,7 +81,7 @@ void render_text_pillbox(uint16_t *framebuffer, int x, int y, const char *text,
 
 // Draw menu header with title
 void render_header(uint16_t *framebuffer, const char *title);
-/* Top-level Alium-style navigation. active: 0=Recents, 1=Games, 2=Settings. */
+/* Top-level Alium-style navigation. active: 0=Recents, 1=Games, 2=Apps, 3=Settings. */
 void render_tabs(uint16_t *framebuffer, int active, uint16_t header_bg);
 
 // Legend modes for X button

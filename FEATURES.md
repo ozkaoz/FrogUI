@@ -122,7 +122,8 @@ FrogUI supports 105+ consoles mapped to their respective cores:
 - **Data Format**: `core_name|game_name|full_path` (with backward compatibility for old format)
 
 ### Features
-- **Auto-tracking**: Every launched game is automatically added to recent list
+- **Auto-tracking**: Launched games are automatically added to Recents; Rockbox
+  tracks and video playback stay out of the game history
 - **Move to Top**: Previously played game moves to top when replayed
 - **Display Format**: "game_name (core_name)" - shows both game and emulator
 - **Persistence**: List saved to disk after each game launch
@@ -431,4 +432,3 @@ FrogUI provides a complete MinUI-inspired file browser experience with:
 - Boundary wrapping protection with delay
 - Modular rendering system
 - Efficient memory management
-
