@@ -52,6 +52,7 @@ static char g_roms_path[64] = ROMS_PATH_DEFAULT;
 #define EBOOK_BIN    SDCARD_BASE "/cubegm/ebook"        /* MuPDF ebook reader (epub/mobi/pdf) */
 #define VIDEO_BIN    SDCARD_BASE "/cubegm/video_player" /* hardware-decoded video player */
 #define IMAGE_BIN    SDCARD_BASE "/cubegm/image_viewer" /* hardware-decoded image viewer */
+#define FROGSHELL_BIN SDCARD_BASE "/cubegm/frogshell"   /* offline SD file manager */
 
 /* Console → core mapping (folder name → libretro .so)
  * Folder names match /mnt/sdcard/roms/ subdirectories (gb300_multicore convention). */
@@ -150,6 +151,7 @@ static const ConsoleMapping console_mappings[] = {
     {"video",  VIDEO_BIN},
     {"music",  ROCKBOX_BIN},                        /* MP3/etc. in Rockbox */
     {"audio",  ROCKBOX_BIN},
+    {"frogshell", FROGSHELL_BIN},
     {"images", IMAGE_BIN},                          /* JPG/PNG/BMP/GIF/etc. (standalone) */
     {"photos", IMAGE_BIN},
     {"fake08", CORES_PATH "/fake08_libretro.so"},   /* legacy folder name */
@@ -1765,15 +1767,17 @@ static int games_tab_entry_count = 0;
 /* Apps are virtual top-level entries. The on-card folder names remain stable
  * for compatibility, while the Apps tab presents friendly names and hides
  * media folders from the Games library. */
-typedef struct { const char *key; const char *label; const char *folder_a; const char *folder_b; } AppEntry;
+typedef struct { const char *key; const char *label; const char *folder_a; const char *folder_b; const char *bin; } AppEntry;
 static const AppEntry app_defs[] = {
-    {"rockbox", "Rockbox", "rockbox", "music"},
-    {"videos",  "Videos",  "videos",  "video"},
+    {"frogshell", "FrogShell", NULL, NULL, FROGSHELL_BIN},
+    {"rockbox", "Rockbox", "rockbox", "music", NULL},
+    {"videos",  "Videos",  "videos",  "video", NULL},
 };
 
 static const char *app_folder_path(int index, char *out, size_t out_size) {
     if (index < 0 || index >= (int)(sizeof(app_defs) / sizeof(app_defs[0]))) return NULL;
     const AppEntry *a = &app_defs[index];
+    if (!a->folder_a) return NULL;
     const char *candidates[3] = { a->folder_a, a->folder_b, NULL };
     if (index == 0) candidates[2] = "audio";
     for (int i = 0; candidates[i]; i++) {
@@ -1797,7 +1801,9 @@ static void scan_apps_tab(void) {
     entry_count = 0;
     for (int i = 0; i < (int)(sizeof(app_defs) / sizeof(app_defs[0])); i++) {
         char path[MAX_PATH_LEN];
-        if (!app_folder_path(i, path, sizeof path)) continue;
+        if (app_defs[i].bin) {
+            if (access(app_defs[i].bin, X_OK) != 0) continue;
+        } else if (!app_folder_path(i, path, sizeof path)) continue;
         if (entry_count >= entry_capacity) {
             entry_capacity = entry_capacity ? entry_capacity * 2 : INITIAL_ENTRIES_CAPACITY;
             entries = realloc(entries, (size_t)entry_capacity * sizeof(*entries));
@@ -2002,7 +2008,8 @@ static void request_standalone_launch(const char *bin_path, const char *rom_path
     if (dot) *dot = '\0';
     /* Media playback is an app, not a game: keep MP3/video launches out of
      * Recents so that list remains useful for actual games. */
-    if (strcmp(bin_path, ROCKBOX_BIN) != 0 && strcmp(bin_path, VIDEO_BIN) != 0) {
+    if (strcmp(bin_path, ROCKBOX_BIN) != 0 && strcmp(bin_path, VIDEO_BIN) != 0 &&
+        strcmp(bin_path, FROGSHELL_BIN) != 0) {
         dbg("standalone_launch: calling recent_games_add");
         recent_games_add(bin_path, game_name, rom_path);
     } else {
@@ -2034,6 +2041,7 @@ static bool is_standalone_bin(const char *name) {
                     strcmp(name, PICO286_BIN)  == 0 ||
                     strcmp(name, LGPT_BIN)     == 0 ||
                     strcmp(name, ROCKBOX_BIN)  == 0 ||
+                    strcmp(name, FROGSHELL_BIN)== 0 ||
                     strcmp(name, EBOOK_BIN)    == 0 ||
                     strcmp(name, VIDEO_BIN)    == 0 ||
                     strcmp(name, IMAGE_BIN)    == 0);
@@ -2916,7 +2924,9 @@ static void handle_input(void) {
                 for (int ai = 0; ai < (int)(sizeof(app_defs) / sizeof(app_defs[0])); ai++)
                     if (strcmp(entries[selected_index].name, app_defs[ai].key) == 0) { app_index = ai; break; }
             }
-            if (app_index >= 0 && app_folder_path(app_index, app_path, sizeof app_path)) {
+            if (app_index >= 0 && app_defs[app_index].bin && access(app_defs[app_index].bin, X_OK) == 0) {
+                request_standalone_launch(app_defs[app_index].bin, ROMS_PATH);
+            } else if (app_index >= 0 && app_folder_path(app_index, app_path, sizeof app_path)) {
                 ui_transition_start(1);
                 strncpy(current_path, app_path, MAX_PATH_LEN - 1);
                 current_path[MAX_PATH_LEN - 1] = '\0';
