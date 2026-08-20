@@ -394,6 +394,9 @@ static bool viewing_recents = false;
 static bool viewing_favourites = false;
 static bool viewing_apps = false;
 static bool apps_browsing = false;
+static bool viewing_activity = false;
+static char activity_paths[128][MAX_PATH_LEN];
+static int activity_count = 0;
 static char apps_root_path[MAX_PATH_LEN] = "";
 static bool game_switcher_fullscreen = false;
 enum { MAIN_TAB_RECENTS, MAIN_TAB_GAMES, MAIN_TAB_APPS, MAIN_TAB_SETTINGS };
@@ -1503,6 +1506,7 @@ done:
     viewing_recents = false;
     viewing_favourites = false;
     viewing_apps = false;
+    viewing_activity = false;
     selected_index = 0;
     scroll_offset  = 0;
 }
@@ -1758,6 +1762,41 @@ static void enter_recents_view(void) {
     selected_index = 0; scroll_offset = 0;
 }
 
+/* Activity Tracker reads the complete durable picoarch playtime ledger, so it
+ * is not limited to the ten-item Recents list. */
+static void enter_activity_view(void) {
+    FILE *f = fopen("/mnt/sdcard/frogui/playtime.txt", "r");
+    char line[MAX_PATH_LEN + 64];
+    activity_count = 0;
+    while (f && fgets(line, sizeof line, f) && activity_count < 128) {
+        char *tab = strchr(line, '\t'); if (!tab) continue;
+        *tab++ = '\0'; if (atol(line) <= 0) continue;
+        tab[strcspn(tab, "\r\n")] = '\0'; if (!tab[0]) continue;
+        strncpy(activity_paths[activity_count], tab, MAX_PATH_LEN - 1);
+        activity_paths[activity_count][MAX_PATH_LEN - 1] = '\0'; activity_count++;
+    }
+    if (f) fclose(f);
+    while (activity_count > entry_capacity) {
+        entry_capacity = entry_capacity ? entry_capacity * 2 : INITIAL_ENTRIES_CAPACITY;
+        DirEntry *ne = realloc(entries, (size_t)entry_capacity * sizeof(*entries));
+        if (!ne) return;
+        entries = ne;
+    }
+    entry_count = 0;
+    for (int i = 0; i < activity_count; i++) {
+        const char *base = strrchr(activity_paths[i], '/');
+        base = base ? base + 1 : activity_paths[i];
+        strncpy(entries[entry_count].name, base, 255);
+        entries[entry_count].name[255] = '\0';
+        char *dot = strrchr(entries[entry_count].name, '.'); if (dot) *dot = '\0';
+        entries[entry_count].is_dir = 0;
+        entry_count++;
+    }
+    viewing_activity = true; viewing_apps = false; apps_browsing = false;
+    viewing_recents = false; viewing_favourites = false; viewing_search = false;
+    selected_index = 0; scroll_offset = 0;
+}
+
 static int games_tab_selected = 0, games_tab_scroll = 0;
 static int recents_tab_selected = 0;
 static int apps_tab_selected = 0;
@@ -1769,6 +1808,7 @@ static int games_tab_entry_count = 0;
  * media folders from the Games library. */
 typedef struct { const char *key; const char *label; const char *folder_a; const char *folder_b; const char *bin; } AppEntry;
 static const AppEntry app_defs[] = {
+    {"activity", "Activity Tracker", NULL, NULL, NULL},
     {"frogshell", "FrogShell", NULL, NULL, FROGSHELL_BIN},
     {"rockbox", "Rockbox", "rockbox", "music", NULL},
     {"videos",  "Videos",  "videos",  "video", NULL},
@@ -1801,7 +1841,9 @@ static void scan_apps_tab(void) {
     entry_count = 0;
     for (int i = 0; i < (int)(sizeof(app_defs) / sizeof(app_defs[0])); i++) {
         char path[MAX_PATH_LEN];
-        if (app_defs[i].bin) {
+        if (!app_defs[i].bin && !strcmp(app_defs[i].key, "activity")) {
+            if (access("/mnt/sdcard/frogui/playtime.txt", R_OK) != 0) continue;
+        } else if (app_defs[i].bin) {
             if (access(app_defs[i].bin, X_OK) != 0) continue;
         } else if (!app_folder_path(i, path, sizeof path)) continue;
         if (entry_count >= entry_capacity) {
@@ -1815,6 +1857,7 @@ static void scan_apps_tab(void) {
         entry_count++;
     }
     viewing_apps = true;
+    viewing_activity = false;
     apps_browsing = false;
     viewing_recents = false;
     viewing_favourites = false;
@@ -1865,7 +1908,7 @@ static int restore_games_tab_entries(void) {
 static int main_tab_active(void) {
     if (settings_menu_active) return MAIN_TAB_SETTINGS;
     if (viewing_recents) return MAIN_TAB_RECENTS;
-    if (viewing_apps || apps_browsing) return MAIN_TAB_APPS;
+    if (viewing_apps || apps_browsing || viewing_activity) return MAIN_TAB_APPS;
     return MAIN_TAB_GAMES;
 }
 
@@ -1892,6 +1935,7 @@ static void switch_main_tab(int target) {
         settings_menu_active = false;
         viewing_apps = false;
         apps_browsing = false;
+        viewing_activity = false;
         viewing_favourites = false;
         viewing_search = false;
         enter_recents_view();
@@ -1906,6 +1950,7 @@ static void switch_main_tab(int target) {
         viewing_favourites = false;
         viewing_apps = false;
         apps_browsing = false;
+        viewing_activity = false;
         viewing_search = false;
         strncpy(current_path, ROMS_PATH, MAX_PATH_LEN - 1);
         current_path[MAX_PATH_LEN - 1] = '\0';
@@ -2910,6 +2955,9 @@ static void handle_input(void) {
             int fc = favorites_get_count();
             if (selected_index < fc)
                 launch_by_path(fl[selected_index].full_path);
+        } else if (viewing_activity) {
+            if (selected_index < activity_count)
+                launch_by_path(activity_paths[selected_index]);
         } else if (viewing_recents) {
             /* Launch from recent games list */
             const RecentGame *rg = recent_games_get_list();
@@ -2924,7 +2972,10 @@ static void handle_input(void) {
                 for (int ai = 0; ai < (int)(sizeof(app_defs) / sizeof(app_defs[0])); ai++)
                     if (strcmp(entries[selected_index].name, app_defs[ai].key) == 0) { app_index = ai; break; }
             }
-            if (app_index >= 0 && app_defs[app_index].bin && access(app_defs[app_index].bin, X_OK) == 0) {
+            if (app_index >= 0 && !strcmp(app_defs[app_index].key, "activity")) {
+                ui_transition_start(1);
+                enter_activity_view();
+            } else if (app_index >= 0 && app_defs[app_index].bin && access(app_defs[app_index].bin, X_OK) == 0) {
                 request_standalone_launch(app_defs[app_index].bin, ROMS_PATH);
             } else if (app_index >= 0 && app_folder_path(app_index, app_path, sizeof app_path)) {
                 ui_transition_start(1);
@@ -2983,6 +3034,10 @@ static void handle_input(void) {
             /* back to the keyboard to refine the query */
             viewing_search = false;
             search_kbd_active = true;
+        } else if (viewing_activity) {
+            ui_transition_start(-1);
+            scan_apps_tab();
+            return;
         } else if (viewing_recents) {
             switch_main_tab(MAIN_TAB_GAMES);
             return;
@@ -3568,13 +3623,16 @@ void retro_run(void) {
             snprintf(search_title, sizeof(search_title), "SEARCH: %s (%d)", search_query, entry_count);
             title = search_title;
         } else {
-            title = viewing_recents    ? "RECENT GAMES" :
+            title = viewing_activity   ? "ACTIVITY TRACKER" :
+                    viewing_recents    ? "RECENT GAMES" :
                     viewing_apps       ? "APPS" :
                     viewing_favourites ? "FAVOURITES" :
                     (strcmp(current_path, ROMS_PATH) == 0)
                     ? "TREEFROGUI: SYSTEMS" : system_display_name(get_basename(current_path));
         }
-        if (viewing_recents)
+        if (viewing_activity)
+            render_tabs(framebuffer, MAIN_TAB_APPS, COLOR_BG);
+        else if (viewing_recents)
             render_tabs(framebuffer, MAIN_TAB_RECENTS, COLOR_BG);
         else if (viewing_apps)
             render_tabs(framebuffer, MAIN_TAB_APPS, COLOR_BG);
@@ -3655,8 +3713,7 @@ void retro_run(void) {
         int show_search = (!viewing_recents && !viewing_favourites && !viewing_search);
 
         /* Play-time for the selected game (Recents list only). */
-        if (viewing_recents && selected_index < entry_count &&
-            selected_index < recent_games_get_count()) {
+        if (viewing_recents && selected_index < entry_count && selected_index < recent_games_get_count()) {
             const RecentGame *rg = recent_games_get_list();
             long s = playtime_lookup(rg[selected_index].full_path);
             if (s > 0) {
@@ -3667,6 +3724,13 @@ void retro_run(void) {
                 font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING,
                                SCREEN_HEIGHT - 56, t, COLOR_TEXT);
             }
+        }
+        if (viewing_activity && selected_index < activity_count) {
+            long s = playtime_lookup(activity_paths[selected_index]); char t[64];
+            if (s >= 3600) snprintf(t, sizeof t, "Played %ldh %ldm", s/3600, (s%3600)/60);
+            else if (s >= 60) snprintf(t, sizeof t, "Played %ldm", s/60);
+            else snprintf(t, sizeof t, "Played %lds", s);
+            font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, SCREEN_HEIGHT - 56, t, COLOR_TEXT);
         }
 
         render_legend(framebuffer, legend_mode, show_select, show_search);
