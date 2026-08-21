@@ -687,6 +687,15 @@ static void theme_pack_scan(void) {
     closedir(dp);
     if (settings_theme_pack_idx < 0 || settings_theme_pack_idx >= theme_pack_count)
         settings_theme_pack_idx = 0;
+    /* New installations start with the credited NextUI background set. A
+     * saved settings.txt selection still wins when settings are loaded later. */
+    if (settings_theme_pack_idx == 0) {
+        for (int i = 1; i < theme_pack_count; i++)
+            if (strcasecmp(theme_pack_files[i], "Art_Book_NextUI") == 0) {
+                settings_theme_pack_idx = i;
+                break;
+            }
+    }
 }
 
 static int wall_has_ext(const char *n) {
