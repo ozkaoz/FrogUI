@@ -848,6 +848,7 @@ typedef struct {
 static const SRow settings_rows[] = {
     { RT_HEADER, "APPEARANCE" },
     { RT_THEME,  "Theme" },
+    { RT_THEME_PACK, "Background Theme Pack" },
     { RT_STYLE,  "Style" },
     { RT_ICON_PACK, "Icon Pack" },
     { RT_TOGGLE, "Center Text", &settings_center_text },
@@ -859,7 +860,6 @@ static const SRow settings_rows[] = {
     { RT_TOGGLE, "Battery Colour Mode", &settings_battery_color },
     { RT_TOGGLE, "Background Images", &settings_backgrounds },
     { RT_RANGE,  "Background Dim", &settings_background_dim, 0, 100, 5 },
-    { RT_THEME_PACK, "Background Theme Pack" },
     { RT_WALLPAPER, "Wallpaper" },
     { RT_WALLFIT, "Background Image Fit" },
     { RT_TOGGLE, "Hide Extensions", &settings_hide_extensions },
