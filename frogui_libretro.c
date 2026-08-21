@@ -1938,8 +1938,11 @@ typedef struct { const char *key; const char *label; const char *folder_a; const
 static const AppEntry app_defs[] = {
     {"activity", "Activity Tracker", NULL, NULL, NULL},
     {"frogshell", "FrogShell", NULL, NULL, FROGSHELL_BIN},
-    {"rockbox", "Rockbox", "rockbox", "music", NULL},
+    {"ebook", "Ebook Reader", "Ebook", "ebooks", NULL},
+    {"images", "Image Viewer", "images", "photos", NULL},
     {"videos",  "Videos",  "videos",  "video", NULL},
+    {"music", "Music / MP3", "music", "audio", NULL},
+    {"rockbox", "Rockbox", "rockbox", NULL, NULL},
 };
 
 static const char *app_folder_path(int index, char *out, size_t out_size) {
@@ -1947,7 +1950,6 @@ static const char *app_folder_path(int index, char *out, size_t out_size) {
     const AppEntry *a = &app_defs[index];
     if (!a->folder_a) return NULL;
     const char *candidates[3] = { a->folder_a, a->folder_b, NULL };
-    if (index == 0) candidates[2] = "audio";
     for (int i = 0; candidates[i]; i++) {
         snprintf(out, out_size, "%s/%s", ROMS_PATH, candidates[i]);
         struct stat st;
@@ -1959,7 +1961,9 @@ static const char *app_folder_path(int index, char *out, size_t out_size) {
 static int is_app_folder_name(const char *name) {
     return name && (!strcasecmp(name, "rockbox") || !strcasecmp(name, "music") ||
                     !strcasecmp(name, "audio") || !strcasecmp(name, "videos") ||
-                    !strcasecmp(name, "video"));
+                    !strcasecmp(name, "video") || !strcasecmp(name, "images") ||
+                    !strcasecmp(name, "photos") || !strcasecmp(name, "ebook") ||
+                    !strcasecmp(name, "ebooks"));
 }
 
 static void scan_apps_tab(void) {
