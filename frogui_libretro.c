@@ -1786,7 +1786,8 @@ static void enter_activity_view(void) {
 		*a++ = '\0'; char *b = strchr(a, '\t'); if (!b) continue;
 		*b++ = '\0'; b[strcspn(b, "\r\n")] = '\0';
 		time_t when = (time_t)atol(line); long seconds = atol(a);
-		if (when <= 0 || seconds <= 0 || !b[0]) continue;
+		/* RTC may be unset (epoch 0); duration and append order are still valid. */
+		if (when < 0 || seconds <= 0 || !b[0]) continue;
 		int found = -1;
 		for (int i = 0; i < activity_count; i++)
 			if (!strcmp(activity_paths[i], b)) { found = i; break; }
@@ -1911,13 +1912,8 @@ static void render_activity_page(uint16_t *fb) {
         char *dot = strrchr(name, '.'); if (dot) *dot = '\0';
         font_draw_text(fb, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, name, COLOR_TEXT);
         char detail[96]; long s = activity_seconds[i];
-        if (activity_last[i] > 0) {
-            char date[24]; struct tm tmv; localtime_r(&activity_last[i], &tmv);
-            strftime(date, sizeof date, "%Y-%m-%d", &tmv);
-            snprintf(detail, sizeof detail, "%s   %ld runs   %ldh %02ldm", date,
-                     activity_runs[i], s / 3600, (s % 3600) / 60);
-        } else snprintf(detail, sizeof detail, "all time   %ld runs   %ldh %02ldm",
-                        activity_runs[i], s / 3600, (s % 3600) / 60);
+        snprintf(detail, sizeof detail, "%ld runs   %ldh %02ldm total",
+                 activity_runs[i], s / 3600, (s % 3600) / 60);
         font_draw_text(fb, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y + UI_S(20), detail, COLOR_DISABLED);
         int bx = SCREEN_WIDTH * 52 / 100, bw = SCREEN_WIDTH - bx - PADDING;
         int fill = (int)((long)bw * s / max_seconds); if (fill < UI_S(3)) fill = UI_S(3);
