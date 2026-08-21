@@ -23,6 +23,7 @@
 #include <ctype.h>
 #include <math.h>
 #include <stdbool.h>
+#include <time.h>
 
 #include "libretro.h"
 #include "font.h"
@@ -396,6 +397,10 @@ static bool viewing_apps = false;
 static bool apps_browsing = false;
 static bool viewing_activity = false;
 static char activity_paths[128][MAX_PATH_LEN];
+static long activity_seconds[128];
+static long activity_runs[128];
+static time_t activity_last[128];
+static int activity_has_dates = 0;
 static int activity_count = 0;
 static char apps_root_path[MAX_PATH_LEN] = "";
 static bool game_switcher_fullscreen = false;
@@ -1617,9 +1622,15 @@ static void render_game_switcher(uint16_t *framebuffer) {
         if (cached_frame) memset(cached_frame, 0, (size_t)pixels * sizeof(uint16_t));
 
         char path[1024];
-        get_thumbnail_path(g->full_path, path, sizeof path);
         Thumbnail tb;
-        if (cached_frame && load_thumbnail(path, &tb) && tb.data) {
+        if (cached_frame && load_game_artwork(g->full_path, ARTWORK_BOXART, &tb) && tb.data) {
+            switcher_blit565(cached_frame, tb.data, tb.alpha,
+                             tb.width, tb.height, bx, by, bw, bh);
+            free_thumbnail(&tb);
+            cached_drawn = 1;
+        }
+        if (cached_frame && !cached_drawn &&
+            load_game_artwork(g->full_path, ARTWORK_TITLE_SCREEN, &tb) && tb.data) {
             switcher_blit565(cached_frame, tb.data, tb.alpha,
                              tb.width, tb.height, bx, by, bw, bh);
             free_thumbnail(&tb);
@@ -1712,9 +1723,10 @@ static void render_boxart_panel(uint16_t *fb, const char *full_path, const char 
     static Thumbnail ctb; static int chas = 0;
     if (strcmp(full_path, cached_path) != 0) {
         if (chas) { free_thumbnail(&ctb); chas = 0; }
-        char tpath[1024];
-        get_thumbnail_path(full_path, tpath, sizeof tpath);
-        if (load_thumbnail(tpath, &ctb) && ctb.data) chas = 1;
+        if (load_game_artwork(full_path, ARTWORK_BOXART, &ctb) && ctb.data) chas = 1;
+        /* Scrapers often provide a title screen rather than box art. */
+        if (!chas && load_game_artwork(full_path, ARTWORK_TITLE_SCREEN, &ctb) && ctb.data)
+            chas = 1;
         strncpy(cached_path, full_path, sizeof cached_path - 1);
         cached_path[sizeof cached_path - 1] = 0;
     }
@@ -1765,17 +1777,60 @@ static void enter_recents_view(void) {
 /* Activity Tracker reads the complete durable picoarch playtime ledger, so it
  * is not limited to the ten-item Recents list. */
 static void enter_activity_view(void) {
-    FILE *f = fopen("/mnt/sdcard/frogui/playtime.txt", "r");
-    char line[MAX_PATH_LEN + 64];
-    activity_count = 0;
-    while (f && fgets(line, sizeof line, f) && activity_count < 128) {
-        char *tab = strchr(line, '\t'); if (!tab) continue;
-        *tab++ = '\0'; if (atol(line) <= 0) continue;
-        tab[strcspn(tab, "\r\n")] = '\0'; if (!tab[0]) continue;
-        strncpy(activity_paths[activity_count], tab, MAX_PATH_LEN - 1);
-        activity_paths[activity_count][MAX_PATH_LEN - 1] = '\0'; activity_count++;
-    }
-    if (f) fclose(f);
+	FILE *f = fopen("/mnt/sdcard/frogui/play_sessions.txt", "r");
+	char line[MAX_PATH_LEN + 96];
+	activity_count = 0;
+	activity_has_dates = 0;
+	while (f && fgets(line, sizeof line, f)) {
+		char *a = strchr(line, '\t'); if (!a) continue;
+		*a++ = '\0'; char *b = strchr(a, '\t'); if (!b) continue;
+		*b++ = '\0'; b[strcspn(b, "\r\n")] = '\0';
+		time_t when = (time_t)atol(line); long seconds = atol(a);
+		if (when <= 0 || seconds <= 0 || !b[0]) continue;
+		int found = -1;
+		for (int i = 0; i < activity_count; i++)
+			if (!strcmp(activity_paths[i], b)) { found = i; break; }
+		if (found < 0 && activity_count < 128) {
+			found = activity_count++;
+			strncpy(activity_paths[found], b, MAX_PATH_LEN - 1);
+			activity_paths[found][MAX_PATH_LEN - 1] = '\0';
+		}
+		if (found >= 0) {
+			activity_seconds[found] += seconds; activity_runs[found]++;
+			if (when > activity_last[found]) activity_last[found] = when;
+		}
+	}
+	if (f) fclose(f);
+	/* Backward compatibility: old installations have totals but no session dates. */
+	if (activity_count == 0) {
+		f = fopen("/mnt/sdcard/frogui/playtime.txt", "r");
+		while (f && fgets(line, sizeof line, f) && activity_count < 128) {
+			char *tab = strchr(line, '\t'); if (!tab) continue;
+			*tab++ = '\0'; tab[strcspn(tab, "\r\n")] = '\0';
+			long seconds = atol(line); if (seconds <= 0 || !tab[0]) continue;
+			strncpy(activity_paths[activity_count], tab, MAX_PATH_LEN - 1);
+			activity_paths[activity_count][MAX_PATH_LEN - 1] = '\0';
+			activity_seconds[activity_count] = seconds; activity_runs[activity_count] = 1;
+			activity_count++;
+		}
+		if (f) fclose(f);
+	}
+	/* Newest session first; without dates retain ledger order. */
+	if (activity_has_dates || activity_count > 0) {
+		for (int i = 0; i < activity_count; i++)
+			if (activity_last[i] > 0) activity_has_dates = 1;
+		if (activity_has_dates) for (int i = 0; i < activity_count; i++) {
+			int best = i;
+			for (int j = i + 1; j < activity_count; j++)
+				if (activity_last[j] > activity_last[best]) best = j;
+			if (best != i) {
+				char p[MAX_PATH_LEN]; strcpy(p, activity_paths[i]); strcpy(activity_paths[i], activity_paths[best]); strcpy(activity_paths[best], p);
+				long l = activity_seconds[i]; activity_seconds[i] = activity_seconds[best]; activity_seconds[best] = l;
+				l = activity_runs[i]; activity_runs[i] = activity_runs[best]; activity_runs[best] = l;
+				time_t d = activity_last[i]; activity_last[i] = activity_last[best]; activity_last[best] = d;
+			}
+		}
+	}
     while (activity_count > entry_capacity) {
         entry_capacity = entry_capacity ? entry_capacity * 2 : INITIAL_ENTRIES_CAPACITY;
         DirEntry *ne = realloc(entries, (size_t)entry_capacity * sizeof(*entries));
@@ -1786,7 +1841,15 @@ static void enter_activity_view(void) {
     for (int i = 0; i < activity_count; i++) {
         const char *base = strrchr(activity_paths[i], '/');
         base = base ? base + 1 : activity_paths[i];
-        strncpy(entries[entry_count].name, base, 255);
+        if (activity_last[i] > 0) {
+            char date[32]; struct tm tmv;
+            localtime_r(&activity_last[i], &tmv);
+            strftime(date, sizeof date, "%Y-%m-%d", &tmv);
+            snprintf(entries[entry_count].name, sizeof entries[entry_count].name,
+                     "%s  %s", date, base);
+        } else {
+            strncpy(entries[entry_count].name, base, 255);
+        }
         entries[entry_count].name[255] = '\0';
         char *dot = strrchr(entries[entry_count].name, '.'); if (dot) *dot = '\0';
         entries[entry_count].is_dir = 0;
@@ -1795,6 +1858,36 @@ static void enter_activity_view(void) {
     viewing_activity = true; viewing_apps = false; apps_browsing = false;
     viewing_recents = false; viewing_favourites = false; viewing_search = false;
     selected_index = 0; scroll_offset = 0;
+}
+
+static void render_activity_graph(uint16_t *fb) {
+    if (!fb || activity_count <= 0) return;
+    int gx = SCREEN_WIDTH * 57 / 100;
+    int gy = UI_S(48);
+    int gw = SCREEN_WIDTH - gx - UI_S(16);
+    int row = UI_S(38), max_rows = (SCREEN_HEIGHT - gy - UI_S(42)) / row;
+    if (gw < UI_S(80) || max_rows <= 0) return;
+    if (max_rows > 6) max_rows = 6;
+    long max_seconds = 1;
+    for (int i = 0; i < activity_count && i < max_rows; i++)
+        if (activity_seconds[i] > max_seconds) max_seconds = activity_seconds[i];
+    font_draw_text(fb, SCREEN_WIDTH, SCREEN_HEIGHT, gx, gy - UI_S(18),
+                   "HOURS PLAYED", COLOR_HEADER);
+    for (int i = 0; i < activity_count && i < max_rows; i++) {
+        int y = gy + i * row;
+        int bw = (int)((long)(gw - UI_S(8)) * activity_seconds[i] / max_seconds);
+        if (bw < UI_S(3)) bw = UI_S(3);
+        render_fill_rect(fb, gx, y, gw, UI_S(18), COLOR_LEGEND_BG);
+        render_fill_rect(fb, gx, y, bw, UI_S(18), COLOR_SELECT_BG);
+        char value[32];
+        if (activity_seconds[i] >= 3600)
+            snprintf(value, sizeof value, "%ldh %ldm", activity_seconds[i]/3600,
+                     (activity_seconds[i]%3600)/60);
+        else
+            snprintf(value, sizeof value, "%ldm", activity_seconds[i]/60);
+        font_draw_text(fb, SCREEN_WIDTH, SCREEN_HEIGHT, gx + UI_S(4), y + UI_S(3),
+                       value, COLOR_SELECT_TEXT);
+    }
 }
 
 static int games_tab_selected = 0, games_tab_scroll = 0;
@@ -3726,12 +3819,23 @@ void retro_run(void) {
             }
         }
         if (viewing_activity && selected_index < activity_count) {
-            long s = playtime_lookup(activity_paths[selected_index]); char t[64];
-            if (s >= 3600) snprintf(t, sizeof t, "Played %ldh %ldm", s/3600, (s%3600)/60);
-            else if (s >= 60) snprintf(t, sizeof t, "Played %ldm", s/60);
-            else snprintf(t, sizeof t, "Played %lds", s);
+            long s = activity_seconds[selected_index]; char t[128];
+            long h = s / 3600, m = (s % 3600) / 60;
+            if (h) snprintf(t, sizeof t, "%ld runs  %ldh %ldm", activity_runs[selected_index], h, m);
+            else if (s >= 60) snprintf(t, sizeof t, "%ld runs  %ldm", activity_runs[selected_index], s/60);
+            else snprintf(t, sizeof t, "%ld runs  %lds", activity_runs[selected_index], s);
+            if (activity_last[selected_index] > 0) {
+                char date[32]; struct tm tmv;
+                localtime_r(&activity_last[selected_index], &tmv);
+                strftime(date, sizeof date, "%Y-%m-%d", &tmv);
+                size_t used = strlen(t); snprintf(t + used, sizeof t - used, "  last %s", date);
+            } else {
+                size_t used = strlen(t); snprintf(t + used, sizeof t - used, "  all time");
+            }
             font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, SCREEN_HEIGHT - 56, t, COLOR_TEXT);
         }
+        if (viewing_activity)
+            render_activity_graph(framebuffer);
 
         render_legend(framebuffer, legend_mode, show_select, show_search);
         }

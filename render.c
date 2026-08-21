@@ -404,6 +404,45 @@ void get_thumbnail_path(const char *game_path, char *thumb_path, size_t thumb_pa
     // No extension: load_thumbnail() probes .png/.jpg/.jpeg/.bmp then .rgb565.
 }
 
+static int artwork_base_path(const char *game_path, const char *folder,
+                             const char *suffix, char *out, size_t out_size) {
+    const char *slash, *filename, *dot;
+    size_t dir_len, stem_len;
+    if (!game_path || !folder || !suffix || !out || out_size == 0) return 0;
+    slash = strrchr(game_path, '/');
+    if (!slash) return 0;
+    dir_len = (size_t)(slash - game_path);
+    filename = slash + 1;
+    dot = strrchr(filename, '.');
+    stem_len = dot ? (size_t)(dot - filename) : strlen(filename);
+    if (stem_len == 0 ||
+        snprintf(out, out_size, "%.*s/%s/%.*s%s", (int)dir_len, game_path,
+                 folder, (int)stem_len, filename, suffix) >= (int)out_size)
+        return 0;
+    return 1;
+}
+
+int load_game_artwork(const char *game_path, ArtworkKind kind, Thumbnail *thumb) {
+    static const char *folders[] = { ".res", "Imgs", "images", "Images", NULL };
+    static const char *box_suffixes[] = { "", NULL };
+    static const char *title_suffixes[] = {
+        "-title", "_title", ".title", "-titlescreen", "_titlescreen",
+        ".titlescreen", "-screenshot", "_screenshot", ".screenshot",
+        "-screen", "_screen", "-preview", "_preview", NULL
+    };
+    const char **suffixes = kind == ARTWORK_TITLE_SCREEN ? title_suffixes : box_suffixes;
+    char base[1024];
+    if (!game_path || !thumb) return 0;
+    for (int f = 0; folders[f]; f++) {
+        for (int s = 0; suffixes[s]; s++) {
+            if (!artwork_base_path(game_path, folders[f], suffixes[s], base, sizeof base))
+                continue;
+            if (load_thumbnail(base, thumb)) return 1;
+        }
+    }
+    return 0;
+}
+
 static uint16_t rgb24_to_rgb565(uint8_t r, uint8_t g, uint8_t b) {
     return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 }

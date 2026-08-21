@@ -161,16 +161,26 @@ Thumbnails enhance your gaming experience by showing preview images of your game
   - 200×200 pixels (80,000 bytes)
   - 250×200 pixels (100,000 bytes)
 
-### Thumbnail Placement
+### Thumbnail / box-art placement
 
-Place thumbnail files alongside your ROMs with `.rgb565` extension:
+The browser accepts PNG, JPG, JPEG, or BMP files (and the legacy raw RGB565
+format). It checks these folders next to the ROM, in this order: `.res/`,
+`Imgs/`, `images/`, and `Images/`.
+
+For box art, name the image after the ROM without its extension:
 ```
 /ROMS/nes/Super Mario Bros.nes
-/ROMS/nes/Super Mario Bros.rgb565
+/ROMS/nes/.res/Super Mario Bros.png
+/ROMS/nes/Imgs/Super Mario Bros.jpg
 
 /ROMS/gb/Tetris.gb
-/ROMS/gb/Tetris.rgb565
+/ROMS/gb/.res/Tetris.rgb565
 ```
+
+Title screens and screenshots are also accepted with one of these suffixes:
+`-title`, `_title`, `.title`, `-titlescreen`, `-screenshot`, `-screen`, or
+`-preview` (for example `Imgs/Tetris-title.png`). Box art is preferred; if it
+is absent, the title/screenshot is shown in the game preview and Recents view.
 
 ### Converting Thumbnails
 

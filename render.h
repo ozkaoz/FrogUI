@@ -114,8 +114,18 @@ typedef struct {
     int height;
 } Thumbnail;
 
+/* Artwork variants understood by the browser. */
+typedef enum {
+    ARTWORK_BOXART = 0,
+    ARTWORK_TITLE_SCREEN = 1
+} ArtworkKind;
+
 // Load thumbnail from PNG file
 int load_thumbnail(const char *png_path, Thumbnail *thumb);
+
+/* Find and decode artwork using the .res, Imgs, and images layouts used by
+ * TreeFrogUI, MinUI, muOS, and common scraper exports. */
+int load_game_artwork(const char *game_path, ArtworkKind kind, Thumbnail *thumb);
 
 // Load raw RGB565 file (fallback) - converts to ARGB8888
 int load_raw_rgb565(const char *path, Thumbnail *thumb);
