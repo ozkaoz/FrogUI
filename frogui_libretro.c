@@ -1841,15 +1841,7 @@ static void enter_activity_view(void) {
     for (int i = 0; i < activity_count; i++) {
         const char *base = strrchr(activity_paths[i], '/');
         base = base ? base + 1 : activity_paths[i];
-        if (activity_last[i] > 0) {
-            char date[32]; struct tm tmv;
-            localtime_r(&activity_last[i], &tmv);
-            strftime(date, sizeof date, "%Y-%m-%d", &tmv);
-            snprintf(entries[entry_count].name, sizeof entries[entry_count].name,
-                     "%s  %s", date, base);
-        } else {
-            strncpy(entries[entry_count].name, base, 255);
-        }
+        strncpy(entries[entry_count].name, base, 255);
         entries[entry_count].name[255] = '\0';
         char *dot = strrchr(entries[entry_count].name, '.'); if (dot) *dot = '\0';
         entries[entry_count].is_dir = 0;
@@ -1888,6 +1880,53 @@ static void render_activity_graph(uint16_t *fb) {
         font_draw_text(fb, SCREEN_WIDTH, SCREEN_HEIGHT, gx + UI_S(4), y + UI_S(3),
                        value, COLOR_SELECT_TEXT);
     }
+}
+
+static void render_activity_page(uint16_t *fb) {
+    if (!fb) return;
+    render_fill_rect(fb, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COLOR_BG);
+    render_tabs(fb, MAIN_TAB_APPS, COLOR_BG);
+    long total = 0, runs = 0;
+    for (int i = 0; i < activity_count; i++) { total += activity_seconds[i]; runs += activity_runs[i]; }
+    char summary[128];
+    snprintf(summary, sizeof summary, "%d GAMES   %ld RUNS   %ldH %02ldM TOTAL",
+             activity_count, runs, total / 3600, (total % 3600) / 60);
+    font_draw_text(fb, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, UI_S(48), "PLAY ACTIVITY", COLOR_HEADER);
+    font_draw_text(fb, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, UI_S(70), summary, COLOR_TEXT);
+    if (activity_count <= 0) {
+        font_draw_text(fb, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, UI_S(125),
+                       "Play a game to start your activity history.", COLOR_TEXT);
+        return;
+    }
+    long max_seconds = 1;
+    for (int i = 0; i < activity_count; i++) if (activity_seconds[i] > max_seconds) max_seconds = activity_seconds[i];
+    int row_h = UI_S(54), first = scroll_offset;
+    int visible = (SCREEN_HEIGHT - UI_S(92) - UI_S(34)) / row_h;
+    if (visible < 1) visible = 1;
+    for (int n = 0; n < visible && first + n < activity_count; n++) {
+        int i = first + n, y = UI_S(94) + n * row_h;
+        if (i == selected_index) render_fill_rect(fb, 0, y - UI_S(4), SCREEN_WIDTH, row_h - UI_S(4), COLOR_LEGEND_BG);
+        const char *base = strrchr(activity_paths[i], '/'); base = base ? base + 1 : activity_paths[i];
+        char name[96]; strncpy(name, base, sizeof name - 1); name[sizeof name - 1] = '\0';
+        char *dot = strrchr(name, '.'); if (dot) *dot = '\0';
+        font_draw_text(fb, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, name, COLOR_TEXT);
+        char detail[96]; long s = activity_seconds[i];
+        if (activity_last[i] > 0) {
+            char date[24]; struct tm tmv; localtime_r(&activity_last[i], &tmv);
+            strftime(date, sizeof date, "%Y-%m-%d", &tmv);
+            snprintf(detail, sizeof detail, "%s   %ld runs   %ldh %02ldm", date,
+                     activity_runs[i], s / 3600, (s % 3600) / 60);
+        } else snprintf(detail, sizeof detail, "all time   %ld runs   %ldh %02ldm",
+                        activity_runs[i], s / 3600, (s % 3600) / 60);
+        font_draw_text(fb, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y + UI_S(20), detail, COLOR_DISABLED);
+        int bx = SCREEN_WIDTH * 52 / 100, bw = SCREEN_WIDTH - bx - PADDING;
+        int fill = (int)((long)bw * s / max_seconds); if (fill < UI_S(3)) fill = UI_S(3);
+        render_fill_rect(fb, bx, y + UI_S(9), bw, UI_S(12), COLOR_LEGEND_BG);
+        render_fill_rect(fb, bx, y + UI_S(9), fill, UI_S(12), COLOR_SELECT_BG);
+    }
+    if (activity_count > visible)
+        font_draw_text(fb, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH - UI_S(92), SCREEN_HEIGHT - UI_S(42),
+                       "UP/DOWN", COLOR_DISABLED);
 }
 
 static int games_tab_selected = 0, games_tab_scroll = 0;
@@ -3835,7 +3874,7 @@ void retro_run(void) {
             font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, SCREEN_HEIGHT - 56, t, COLOR_TEXT);
         }
         if (viewing_activity)
-            render_activity_graph(framebuffer);
+            render_activity_page(framebuffer);
 
         render_legend(framebuffer, legend_mode, show_select, show_search);
         }
