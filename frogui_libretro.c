@@ -1541,8 +1541,9 @@ static long playtime_lookup(const char *path) {
 }
 
 /* ---------------- OnionOS-style game switcher (recents as box-art carousel) ----
- * Art = box art (.res/<name>.rgb565); if missing, the newest save-state
- * screenshot picoarch wrote (.st<N>.bmp). Toggled by settings_game_switcher. */
+ * Art = the newest gameplay screenshot picoarch wrote (.scr.bmp or .st<N>.bmp);
+ * if no capture exists, fall back to box art/title artwork. Toggled by
+ * settings_game_switcher. */
 #include "stb_image.h"
 
 /* Newest save-state screenshot for a game: /mnt/sdcard/picoarch/<tag>/<base>.st<N>.bmp */
@@ -1632,21 +1633,9 @@ static void render_game_switcher(uint16_t *framebuffer) {
 
         char path[1024];
         Thumbnail tb;
-        if (cached_frame && load_game_artwork(g->full_path, ARTWORK_BOXART, &tb) && tb.data) {
-            switcher_blit565(cached_frame, tb.data, tb.alpha,
-                             tb.width, tb.height, bx, by, bw, bh);
-            free_thumbnail(&tb);
-            cached_drawn = 1;
-        }
-        if (cached_frame && !cached_drawn &&
-            load_game_artwork(g->full_path, ARTWORK_TITLE_SCREEN, &tb) && tb.data) {
-            switcher_blit565(cached_frame, tb.data, tb.alpha,
-                             tb.width, tb.height, bx, by, bw, bh);
-            free_thumbnail(&tb);
-            cached_drawn = 1;
-        }
-        if (cached_frame && !cached_drawn &&
-            switcher_savestate_bmp(g->full_path, path, sizeof path)) {
+        /* A Recents card should show where the player left off. Only use
+         * curated artwork when no gameplay capture exists yet. */
+        if (cached_frame && switcher_savestate_bmp(g->full_path, path, sizeof path)) {
             int w, h, ch; unsigned char *img = stbi_load(path, &w, &h, &ch, 3);
             if (img) {
             /* Gameplay captures use the core's raw pixel geometry. PS1 in
@@ -1666,6 +1655,20 @@ static void render_game_switcher(uint16_t *framebuffer) {
                 stbi_image_free(img);
                 cached_drawn = 1;
             }
+        }
+        if (cached_frame && !cached_drawn &&
+            load_game_artwork(g->full_path, ARTWORK_BOXART, &tb) && tb.data) {
+            switcher_blit565(cached_frame, tb.data, tb.alpha,
+                             tb.width, tb.height, bx, by, bw, bh);
+            free_thumbnail(&tb);
+            cached_drawn = 1;
+        }
+        if (cached_frame && !cached_drawn &&
+            load_game_artwork(g->full_path, ARTWORK_TITLE_SCREEN, &tb) && tb.data) {
+            switcher_blit565(cached_frame, tb.data, tb.alpha,
+                             tb.width, tb.height, bx, by, bw, bh);
+            free_thumbnail(&tb);
+            cached_drawn = 1;
         }
         strncpy(cached_game, g->full_path, sizeof cached_game - 1);
         cached_game[sizeof cached_game - 1] = '\0';
