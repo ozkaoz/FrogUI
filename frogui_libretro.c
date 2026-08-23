@@ -836,7 +836,7 @@ static const char *style_keys[STYLE_COUNT] = {"vertical", "horizontal", "system"
  * options. Adding, reordering, or grouping = just editing this table; the nav,
  * adjust, and render code all iterate it. TOGGLE/RANGE point at their int; THEME
  * and FONT are special (dynamic option lists); ACTION opens the remap wizard. */
-typedef enum { RT_HEADER, RT_TOGGLE, RT_RANGE, RT_THEME, RT_STYLE, RT_FONT, RT_WALLPAPER,
+typedef enum { RT_HEADER, RT_INFO, RT_TOGGLE, RT_RANGE, RT_THEME, RT_STYLE, RT_FONT, RT_WALLPAPER,
                RT_WALLFIT, RT_THEME_PACK, RT_ICON_PACK, RT_CACHE_REBUILD, RT_ACTION } SRowType;
 typedef struct {
     SRowType type;
@@ -875,11 +875,28 @@ static const SRow settings_rows[] = {
     { RT_TOGGLE, "File Cache", &settings_file_cache },
     { RT_CACHE_REBUILD, "Rebuild File Cache" },
     { RT_TOGGLE, "Disable Sleep (restart)", &settings_disable_sleep },
+    { RT_INFO,   "TreeFrogUI Version" },
     { RT_ACTION, "Button Mapping" },
 };
 #define SETTINGS_ROW_N ((int)(sizeof(settings_rows) / sizeof(settings_rows[0])))
 static int settings_row_selectable(int i) {
-    return i >= 0 && i < SETTINGS_ROW_N && settings_rows[i].type != RT_HEADER;
+    return i >= 0 && i < SETTINGS_ROW_N && settings_rows[i].type != RT_HEADER && settings_rows[i].type != RT_INFO;
+}
+
+static const char *treefrogui_version(void) {
+    static char version[32];
+    static int loaded;
+    if (!loaded) {
+        FILE *f = fopen("/mnt/sdcard/cubegm/version.txt", "r");
+        if (f) {
+            if (!fgets(version, sizeof version, f)) version[0] = '\0';
+            fclose(f);
+            version[strcspn(version, "\r\n")] = '\0';
+        }
+        if (!version[0]) snprintf(version, sizeof version, "unknown");
+        loaded = 1;
+    }
+    return version;
 }
 
 static bool remap_wizard_active = false;
@@ -3457,6 +3474,7 @@ static void render_settings_menu(void) {
             continue;
         }
         switch (r->type) {
+        case RT_INFO:   snprintf(line, sizeof line, "%s: %s", r->label, treefrogui_version()); break;
         case RT_THEME:  snprintf(line, sizeof line, "%s: < %s >", r->label, themes[settings_theme_idx].name); break;
         case RT_STYLE:  snprintf(line, sizeof line, "%s: < %s >", r->label, style_names[settings_style]); break;
         case RT_FONT:   snprintf(line, sizeof line, "%s: < %s >", r->label, font_count > 0 ? font_disp[settings_font_idx] : "(none)"); break;
