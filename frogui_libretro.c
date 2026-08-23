@@ -2769,6 +2769,9 @@ static const char *system_icon_path(const char *folder, char *path, size_t size)
     if (strcmp(folder, FAVOURITES_ENTRY_NAME) == 0) key = "favourites";
     else if (strcmp(folder, RECENTS_ENTRY_NAME) == 0) key = "recents";
     else if (strcmp(folder, SETTINGS_ENTRY_NAME) == 0) key = "settings";
+    /* Master System is stored as SMS on some cards, while the icon packs use
+     * the shared Game Gear/Master System artwork key (gg). */
+    else if (strcasecmp(folder, "sms") == 0) key = "gg";
     if (settings_icon_pack_idx > 0 && settings_icon_pack_idx < icon_pack_count)
         snprintf(path, size, BANNER_DIR "/icon-packs/%s/%s.png",
                  icon_pack_files[settings_icon_pack_idx], key);
