@@ -9,6 +9,9 @@
 #include <stdbool.h>
 
 #define KEYMAP_FILE "/mnt/sdcard/frogui/keymap.txt"
+#define FROG_RAW_MAX_BIT 16
+#define FROG_RAW_BIT_COUNT 17
+#define FROG_RAW_BUTTON_MASK 0x0001FFFFu
 
 typedef enum {
     FROG_BTN_UP = 0,
@@ -25,6 +28,7 @@ typedef enum {
     FROG_BTN_R2,
     FROG_BTN_START,
     FROG_BTN_SELECT,
+    FROG_BTN_FN,
     FROG_BTN_COUNT
 } FrogButton;
 
@@ -43,11 +47,11 @@ bool input_is_pressed(FrogButton btn);
 bool input_was_pressed(FrogButton btn);   /* true only on rising edge this frame */
 bool input_repeat(FrogButton btn);        /* edge, then auto-repeats while held (time-based) */
 
-/* Raw 16-bit cubevol value (needed by remap wizard). */
+/* Raw cubevol value (bits 0..16 inclusive, mask 0x1FFFF) needed by remap wizard. (needed by remap wizard). */
 uint32_t input_get_raw_state(void);
 void input_set_ext_raw(uint32_t raw);
 
-/* Remap table: logical button -> raw bit index (0-15), or -1 = unmapped. */
+/* Remap table: logical button -> raw bit index (0..16), or -1 = unmapped. */
 void input_reset_defaults(void);
 void input_set_raw_bit(FrogButton btn, int raw_bit);
 int  input_get_raw_bit(FrogButton btn);

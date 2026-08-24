@@ -2409,7 +2409,7 @@ static void handle_remap_wizard(void) {
     bool skip = (risen >> input_get_raw_bit(FROG_BTN_B)) & 1;
     int  pressed_bit = -1;
     if (!skip) {
-        for (int bit = 0; bit < 16; bit++) {
+        for (int bit = 0; bit < FROG_RAW_BIT_COUNT; bit++) {
             if ((risen >> bit) & 1) { pressed_bit = bit; break; }
         }
     }

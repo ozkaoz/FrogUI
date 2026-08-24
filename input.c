@@ -35,6 +35,7 @@ static const int default_bits[FROG_BTN_COUNT] = {
     [FROG_BTN_R2]     = -1,
     [FROG_BTN_START]  = 3,
     [FROG_BTN_SELECT] = 0,
+    [FROG_BTN_FN]     = 16,
 };
 
 static int remap_bits[FROG_BTN_COUNT];
@@ -44,13 +45,13 @@ static uint32_t remap_logical_bits[FROG_BTN_COUNT]; /* precomputed: 1<<logical *
 static void rebuild_masks(void) {
     for (int i = 0; i < FROG_BTN_COUNT; i++) {
         int b = remap_bits[i];
-        remap_raw_masks[i]    = (b >= 0 && b <= 15) ? (1u << b) : 0;
+        remap_raw_masks[i]    = (b >= 0 && b <= FROG_RAW_MAX_BIT) ? (1u << b) : 0;
         remap_logical_bits[i] = 1u << i;
     }
 }
 
 static const char *btn_names[FROG_BTN_COUNT] = {
-    "UP","DOWN","LEFT","RIGHT","A","B","X","Y","L1","R1","L2","R2","START","SELECT"
+    "UP","DOWN","LEFT","RIGHT","A","B","X","Y","L1","R1","L2","R2","START","SELECT","FN"
 };
 
 const char *input_btn_name(FrogButton btn) {
@@ -108,18 +109,18 @@ void input_update(void) {
     /* Combine the raw joy_key shm with ext_raw (picoarch's ALREADY-debounced input
      * via input_state_cb). The shm alone flickers from the rkgame+cubevol two-writer
      * race → ghost menu inputs; ORing+debouncing below removes that. */
-    uint32_t raw = (cubevol_keys ? (*cubevol_keys & 0xFFFF) : 0) | (ext_raw & 0xFFFF);
+    uint32_t raw = (cubevol_keys ? (*cubevol_keys & FROG_RAW_BUTTON_MASK) : 0) | (ext_raw & FROG_RAW_BUTTON_MASK);
 
     /* Debounce face bits by ELAPSED TIME, not update count. The redraw-on-demand
      * UI polls near 1kHz between presented frames, so the old 4-update debounce
      * shrank from its intended ~65ms to ~4ms. That allowed the right stick's
      * merged X-bit glitches to open Search while a game list was scrolling.
      * Navigation stays immediate; release always clears immediately. */
-    static long down_since[16] = {0};
+    static long down_since[FROG_RAW_BIT_COUNT] = {0};
     static uint32_t raw_down = 0;
     static uint32_t committed = 0;
     long now = input_now_ms();
-    for (int b = 0; b < 16; b++) {
+    for (int b = 0; b < FROG_RAW_BIT_COUNT; b++) {
         uint32_t m = 1u << b;
         if (raw & m) {
             if (!(raw_down & m)) {
@@ -173,11 +174,11 @@ bool input_repeat(FrogButton btn) {
     return false;
 }
 
-void input_set_ext_raw(uint32_t raw) { ext_raw = raw; }
+void input_set_ext_raw(uint32_t raw) { ext_raw = raw & FROG_RAW_BUTTON_MASK; }
 
 uint32_t input_get_raw_state(void) {
-    uint32_t shm = cubevol_keys ? (*cubevol_keys & 0xFFFF) : 0;
-    return shm | ext_raw;
+    uint32_t shm = cubevol_keys ? (*cubevol_keys & FROG_RAW_BUTTON_MASK) : 0;
+    return (shm | ext_raw) & FROG_RAW_BUTTON_MASK;
 }
 
 void input_set_raw_bit(FrogButton btn, int raw_bit) {
