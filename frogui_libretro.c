@@ -818,7 +818,7 @@ static const char *style_keys[STYLE_COUNT] = {"vertical", "horizontal", "system"
  * adjust, and render code all iterate it. TOGGLE/RANGE point at their int; THEME
  * and FONT are special (dynamic option lists); ACTION opens the remap wizard. */
 typedef enum { RT_HEADER, RT_TOGGLE, RT_RANGE, RT_THEME, RT_STYLE, RT_FONT, RT_WALLPAPER,
-               RT_WALLFIT, RT_THEME_PACK, RT_ICON_PACK, RT_CACHE_REBUILD, RT_ACTION } SRowType;
+               RT_WALLFIT, RT_THEME_PACK, RT_ICON_PACK, RT_CACHE_REBUILD, RT_ACTION, RT_USB } SRowType;
 typedef struct {
     SRowType type;
     const char *label;
@@ -855,12 +855,136 @@ static const SRow settings_rows[] = {
     { RT_RANGE,  "Volume", &settings_volume, 0, 100, 5 },
     { RT_TOGGLE, "File Cache", &settings_file_cache },
     { RT_CACHE_REBUILD, "Rebuild File Cache" },
+    { RT_USB,    "USB Connection" },
     { RT_TOGGLE, "Disable Sleep (restart)", &settings_disable_sleep },
     { RT_ACTION, "Button Mapping" },
 };
 #define SETTINGS_ROW_N ((int)(sizeof(settings_rows) / sizeof(settings_rows[0])))
 static int settings_row_selectable(int i) {
     return i >= 0 && i < SETTINGS_ROW_N && settings_rows[i].type != RT_HEADER;
+}
+
+/* --- USB Connection (frontend only, manager en cubegm/usb/usb_manager.sh) --- */
+#define USB_STATUS_FILE  "/tmp/treefrog_usb_status"
+#define USB_REQUEST_FILE "/tmp/treefrog_usb_request"
+
+static void usb_trim(char *s) {
+    size_t n = strlen(s);
+    while (n > 0 && (s[n-1] == '\n' || s[n-1] == '\r' || s[n-1] == ' ' || s[n-1] == '\t')) s[--n] = '\0';
+    char *p = s;
+    while (*p == ' ' || *p == '\t') p++;
+    if (p != s) memmove(s, p, strlen(p) + 1);
+}
+
+static int usb_status_is_on(void) {
+    FILE *f = fopen(USB_STATUS_FILE, "r");
+    if (!f) return 0;
+    char buf[32] = {0};
+    if (!fgets(buf, sizeof buf, f)) { fclose(f); return 0; }
+    fclose(f);
+    usb_trim(buf);
+    return (strcmp(buf, "TREEFROG_MSC") == 0 || strcmp(buf, "CONNECTED") == 0 || strcmp(buf, "TREEFROG_MTP") == 0);
+}
+
+static int usb_status_is_connecting(void) {
+    FILE *f = fopen(USB_STATUS_FILE, "r");
+    if (!f) return 0;
+    char buf[32] = {0};
+    if (!fgets(buf, sizeof buf, f)) { fclose(f); return 0; }
+    fclose(f);
+    usb_trim(buf);
+    return (strcmp(buf, "CONNECTING") == 0 || strcmp(buf, "HOST") == 0);
+}
+
+static int usb_status_is_failed(void) {
+    FILE *f = fopen(USB_STATUS_FILE, "r");
+    if (!f) return 0;
+    char buf[32] = {0};
+    if (!fgets(buf, sizeof buf, f)) { fclose(f); return 0; }
+    fclose(f);
+    usb_trim(buf);
+    return (strcmp(buf, "FAILED") == 0 || strncmp(buf, "ERR", 3) == 0);
+}
+
+static const char* usb_status_label(void) {
+    if (usb_status_is_on()) return "ON";
+    if (usb_status_is_connecting()) return "CONNECTING...";
+    if (usb_status_is_failed()) return "FAILED";
+    return "OFF";
+}
+
+static void usb_request(const char *val) {
+    char cmd[128];
+    snprintf(cmd, sizeof cmd, "nohup sh -c 'echo %s > %s' > /dev/null 2>&1 &", val, USB_REQUEST_FILE);
+    system(cmd);
+}
+
+static void usb_toggle(void) {
+    if (usb_status_is_on() || usb_status_is_connecting()) {
+        usb_request("NONE");
+        ui_toast_show("USB: OFF");
+    } else {
+        usb_request("MSC");
+        ui_toast_show("USB: Connecting...");
+    }
+}
+
+/* Submenú USB: Connect / Disconnect / Status (genérico, sin hardcodeos) */
+static bool usb_submenu_active = false;
+static int usb_submenu_idx = 0;
+
+static void handle_usb_submenu(void) {
+    if (input_was_pressed(FROG_BTN_UP)) {
+        usb_submenu_idx = (usb_submenu_idx - 1 + 2) % 2;
+    }
+    if (input_was_pressed(FROG_BTN_DOWN)) {
+        usb_submenu_idx = (usb_submenu_idx + 1) % 2;
+    }
+    if (input_was_pressed(FROG_BTN_A)) {
+        if (usb_submenu_idx == 0) {
+            usb_request("MSC");
+            ui_toast_show("USB: Connecting...");
+        } else if (usb_submenu_idx == 1) {
+            usb_request("NONE");
+            ui_toast_show("USB: OFF");
+        }
+    }
+    if (input_was_pressed(FROG_BTN_B)) {
+        usb_submenu_active = false;
+        return;
+    }
+    if (input_was_pressed(FROG_BTN_LEFT) || input_was_pressed(FROG_BTN_RIGHT)) {
+        if (usb_submenu_idx == 0) {
+            usb_request("MSC");
+            ui_toast_show("USB: Connecting...");
+        } else if (usb_submenu_idx == 1) {
+            usb_request("NONE");
+            ui_toast_show("USB: OFF");
+        }
+    }
+}
+
+static void render_usb_submenu(void) {
+    if (banner_is_loaded())
+        banner_render(framebuffer);
+    else
+        render_clear_screen(framebuffer);
+    render_header(framebuffer, "USB CONNECTION");
+    const char *status = usb_status_label();
+    char line[128];
+    int y = START_Y;
+    snprintf(line, sizeof line, "Status: %s", status);
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, line, COLOR_TEXT);
+    y += ITEM_HEIGHT + UI_S(8);
+    const char *opts[2] = {"Connect USB", "Disconnect USB"};
+    for (int i = 0; i < 2; i++) {
+        int ry = y + i * ITEM_HEIGHT;
+        if (i == usb_submenu_idx)
+            render_text_pillbox(framebuffer, PADDING, ry, opts[i], COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+        else
+            font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, ry, opts[i], COLOR_TEXT);
+    }
+    render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
 
 static bool remap_wizard_active = false;
@@ -2302,9 +2426,19 @@ static void handle_settings_menu(void) {
             if (*r->val < r->rmin) *r->val = r->rmin;
             if (*r->val > r->rmax) *r->val = r->rmax;
             break;
+        case RT_USB:
+            usb_submenu_active = true;
+            usb_submenu_idx = 0;
+            break;
         default: break;
         }
-        settings_preview_row(r);
+        if (r->type != RT_USB) settings_preview_row(r);
+    }
+    if (input_was_pressed(FROG_BTN_A) &&
+        settings_rows[settings_menu_idx].type == RT_USB) {
+        usb_submenu_active = true;
+        usb_submenu_idx = 0;
+        return;
     }
     if (input_was_pressed(FROG_BTN_A) &&
         settings_rows[settings_menu_idx].type == RT_CACHE_REBUILD) {
@@ -2774,6 +2908,12 @@ static void handle_input(void) {
     /* Remap wizard: detect raw rising edge on any bit; B = skip this step */
     if (remap_wizard_active) {
         handle_remap_wizard();
+        return;
+    }
+
+    /* USB submenu overlay */
+    if (usb_submenu_active) {
+        handle_usb_submenu();
         return;
     }
 
@@ -3257,6 +3397,7 @@ static void render_settings_menu(void) {
         case RT_ICON_PACK: snprintf(line, sizeof line, "%s: < %s >", r->label, icon_pack_disp[settings_icon_pack_idx]); break;
         case RT_TOGGLE: snprintf(line, sizeof line, "%s: < %s >", r->label, onoff_names[*r->val]); break;
         case RT_RANGE:  snprintf(line, sizeof line, "%s: < %d%% >", r->label, *r->val); break;
+        case RT_USB:    snprintf(line, sizeof line, "%s: < %s >", r->label, usb_status_label()); break;
         default:        snprintf(line, sizeof line, "%s", r->label); break;   /* RT_ACTION */
         }
         /* Options sit indented under their ">> HEADER" so the grouping reads
@@ -3482,7 +3623,7 @@ void retro_run(void) {
      * sampling input at roughly 1kHz. Search/picker/remap overlays remain
      * continuously drawn for now. */
     int can_skip_idle = !(search_kbd_active || core_picker_active ||
-                          remap_wizard_active);
+                          remap_wizard_active || usb_submenu_active);
     int redraw = 1;
     if (can_skip_idle) {
         static unsigned last_sig = 0; static int first = 1;
@@ -3490,7 +3631,20 @@ void retro_run(void) {
         sig = sig*33u + (unsigned)ui_toast_frames;
         sig = sig*33u + (unsigned)view_transition_frame;
         sig = sig*33u + (unsigned)settings_menu_active;
-        if (settings_menu_active) {
+        sig = sig*33u + (unsigned)usb_submenu_active;
+        if (usb_submenu_active) {
+            sig = sig*33u + (unsigned)usb_submenu_idx;
+            {
+                FILE *uf = fopen(USB_STATUS_FILE, "r");
+                if (uf) {
+                    char ub[32] = {0};
+                    if (fgets(ub, sizeof ub, uf)) {
+                        for (char *p = ub; *p; p++) sig = sig*33u + (unsigned char)*p;
+                    }
+                    fclose(uf);
+                }
+            }
+        } else if (settings_menu_active) {
             sig = sig*33u + (unsigned)settings_menu_idx;
             sig = sig*33u + (unsigned)settings_theme_idx;
             sig = sig*33u + (unsigned)settings_style;
@@ -3536,6 +3690,8 @@ void retro_run(void) {
         render_core_picker();
     } else if (remap_wizard_active) {
         render_remap_wizard();
+    } else if (usb_submenu_active) {
+        render_usb_submenu();
     } else if (settings_menu_active) {
         render_settings_menu();
     } else if (viewing_recents && settings_game_switcher) {

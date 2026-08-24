@@ -3,7 +3,7 @@ set -e
 MIPS="$HOME/sf3000-work/sf3000toolchain/mipsel-buildroot-linux-gnu_sdk-buildroot/opt/ext-toolchain/bin/mips-mti-linux-gnu-"
 SYSROOT="$HOME/sf3000-work/sf3000toolchain/mipsel-buildroot-linux-gnu_sdk-buildroot/mipsel-buildroot-linux-gnu/sysroot"
 CC="${MIPS}gcc"
-cd /home/tomaszz/sf3000-work/FrogUI
+cd "$(dirname "$0")"
 
 CFLAGS="-mips32r2 -march=mips32r2 -mtune=24kc -mfp32 -mhard-float -mlong-calls -EL --sysroot=$SYSROOT -fPIC -G0 -Wall -I./ -I$SYSROOT/usr/include -Ofast -DPLATFORM_SF3000 -DNDEBUG -D__LIBRETRO__"
 
