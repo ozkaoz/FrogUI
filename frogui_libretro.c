@@ -23,6 +23,7 @@
 #include <ctype.h>
 #include <math.h>
 #include <stdbool.h>
+#include <time.h>
 
 #include "libretro.h"
 #include "font.h"
@@ -818,7 +819,7 @@ static const char *style_keys[STYLE_COUNT] = {"vertical", "horizontal", "system"
  * adjust, and render code all iterate it. TOGGLE/RANGE point at their int; THEME
  * and FONT are special (dynamic option lists); ACTION opens the remap wizard. */
 typedef enum { RT_HEADER, RT_TOGGLE, RT_RANGE, RT_THEME, RT_STYLE, RT_FONT, RT_WALLPAPER,
-               RT_WALLFIT, RT_THEME_PACK, RT_ICON_PACK, RT_CACHE_REBUILD, RT_ACTION, RT_USB } SRowType;
+               RT_WALLFIT, RT_THEME_PACK, RT_ICON_PACK, RT_CACHE_REBUILD, RT_ACTION, RT_USB, RT_MTP_TEST } SRowType;
 typedef struct {
     SRowType type;
     const char *label;
@@ -860,8 +861,20 @@ static const SRow settings_rows[] = {
     { RT_ACTION, "Button Mapping" },
 };
 #define SETTINGS_ROW_N ((int)(sizeof(settings_rows) / sizeof(settings_rows[0])))
+/* Developer MTP test: visible only when flag file or mtp-daemon exists (validation only) */
+static int mtp_dev_is_available(void) {
+    if (access("/mnt/sdcard/cubegm/enable_mtp_dev", F_OK) == 0) return 1;
+    if (access("/mnt/sdcard/cubegm/usb/mtp-daemon", F_OK) == 0) return 1;
+    if (access("/mnt/sdcard/cubegm/usb/mtp_daemon", F_OK) == 0) return 1;
+    return 0;
+}
 static int settings_row_selectable(int i) {
-    return i >= 0 && i < SETTINGS_ROW_N && settings_rows[i].type != RT_HEADER;
+    if (i < 0 || i >= SETTINGS_ROW_N) return 0;
+    if (settings_rows[i].type == RT_HEADER) return 0;
+    if (settings_rows[i].type == RT_MTP_TEST) return mtp_dev_is_available();
+    /* Hide DEVELOPER header when no dev entry visible */
+    if (settings_rows[i].type == RT_HEADER && strcmp(settings_rows[i].label, "DEVELOPER") == 0) return mtp_dev_is_available();
+    return 1;
 }
 
 /* --- USB Connection (frontend only, manager en cubegm/usb/usb_manager.sh) --- */
@@ -929,38 +942,23 @@ static void usb_toggle(void) {
     }
 }
 
-/* Submenú USB: Connect / Disconnect / Status (genérico, sin hardcodeos) */
+/* Submenú USB Connection final: A = Connect, B = Disconnect, muestra status */
 static bool usb_submenu_active = false;
-static int usb_submenu_idx = 0;
+static const char* mtp_dev_status_label(void);
+static int mtp_daemon_running(void);
+static int mtp_gadget_bound(void);
 
 static void handle_usb_submenu(void) {
-    if (input_was_pressed(FROG_BTN_UP)) {
-        usb_submenu_idx = (usb_submenu_idx - 1 + 2) % 2;
-    }
-    if (input_was_pressed(FROG_BTN_DOWN)) {
-        usb_submenu_idx = (usb_submenu_idx + 1) % 2;
-    }
     if (input_was_pressed(FROG_BTN_A)) {
-        if (usb_submenu_idx == 0) {
-            usb_request("MSC");
-            ui_toast_show("USB: Connecting...");
-        } else if (usb_submenu_idx == 1) {
-            usb_request("NONE");
-            ui_toast_show("USB: OFF");
-        }
+        system("nohup /mnt/sdcard/cubegm/usb/usb_mtp.sh start > /dev/null 2>&1 &");
+        ui_toast_show("USB: Connecting...");
+        return; /* stay in submenu, do not go back */
     }
     if (input_was_pressed(FROG_BTN_B)) {
+        system("nohup /mnt/sdcard/cubegm/usb/usb_mtp.sh stop > /dev/null 2>&1 &");
         usb_submenu_active = false;
+        ui_toast_show("USB: OFF");
         return;
-    }
-    if (input_was_pressed(FROG_BTN_LEFT) || input_was_pressed(FROG_BTN_RIGHT)) {
-        if (usb_submenu_idx == 0) {
-            usb_request("MSC");
-            ui_toast_show("USB: Connecting...");
-        } else if (usb_submenu_idx == 1) {
-            usb_request("NONE");
-            ui_toast_show("USB: OFF");
-        }
     }
 }
 
@@ -970,20 +968,145 @@ static void render_usb_submenu(void) {
     else
         render_clear_screen(framebuffer);
     render_header(framebuffer, "USB CONNECTION");
-    const char *status = usb_status_label();
-    char line[128];
+    char line[160];
     int y = START_Y;
-    snprintf(line, sizeof line, "Status: %s", status);
+    /* Status from MTP daemon */
+    const char *st = mtp_dev_status_label();
+    int running = mtp_daemon_running();
+    int bound = mtp_gadget_bound();
+    snprintf(line, sizeof line, "Status: %s", st);
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, line, COLOR_TEXT);
+    y += ITEM_HEIGHT;
+    snprintf(line, sizeof line, "Daemon: %s", running ? "running" : "stopped");
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, line, COLOR_TEXT);
+    y += ITEM_HEIGHT;
+    snprintf(line, sizeof line, "Gadget: %s", bound ? "bound" : "unbound");
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, line, COLOR_TEXT);
+    y += ITEM_HEIGHT * 2;
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y,
+        "[A] Connect  [B] Disconnect", COLOR_TEXT);
+    render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
+}
+
+/* --- USB MTP Test (Developer Tools, validation only) --- */
+static bool mtp_test_active = false;
+static int mtp_test_idx = 0;
+
+static const char* mtp_dev_status_label(void) {
+    FILE *f = fopen(USB_STATUS_FILE, "r");
+    if (!f) return "NONE";
+    char buf[32]={0};
+    if (!fgets(buf,sizeof buf,f)) { fclose(f); return "NONE"; }
+    fclose(f);
+    usb_trim(buf);
+    if (strcmp(buf,"TREEFROG_MTP")==0) return "TREEFROG_MTP";
+    if (strcmp(buf,"TREEFROG_MSC")==0) return "TREEFROG_MSC";
+    if (strcmp(buf,"CONNECTING")==0) return "CONNECTING";
+    if (strcmp(buf,"NONE")==0) return "NONE";
+    if (strncmp(buf,"FAILED",6)==0) return "FAILED";
+    static char st_copy[32];
+    strncpy(st_copy, buf, sizeof(st_copy)-1);
+    return st_copy[0]?st_copy:"NONE";
+}
+static int mtp_daemon_running(void) {
+    FILE *f = fopen("/tmp/mtp_daemon.pid","r");
+    if (!f) return 0;
+    char buf[32]={0};
+    if (!fgets(buf,sizeof buf,f)) { fclose(f); return 0; }
+    fclose(f);
+    int pid = atoi(buf);
+    if (pid<=0) return 0;
+    char path[64];
+    snprintf(path,sizeof path,"/proc/%d/cmdline",pid);
+    FILE *pf = fopen(path,"r");
+    if (!pf) return 0;
+    char cmd[64]={0};
+    fread(cmd,1,sizeof cmd-1,pf);
+    fclose(pf);
+    return (strstr(cmd,"mtp")!=NULL) ? 1 : 0;
+}
+static int mtp_gadget_bound(void) {
+    FILE *f = fopen("/sys/kernel/config/usb_gadget/treefrog_mtp/UDC","r");
+    if (!f) return 0;
+    char buf[64]={0};
+    if (!fgets(buf,sizeof buf,f)) { fclose(f); return 0; }
+    fclose(f);
+    usb_trim(buf);
+    return buf[0]!='\0';
+}
+static void mtp_export_logs(void) {
+    system("mkdir -p /mnt/sdcard/cubegm/logs");
+    char ts[32];
+    snprintf(ts,sizeof ts,"%ld", (long)time(NULL));
+    char cmd[512];
+    snprintf(cmd,sizeof cmd,
+        "cat /tmp/treefrog_usb_status > /mnt/sdcard/cubegm/logs/mtp_hwtest_status_%s.txt 2>/dev/null; "
+        "cat /tmp/mtp_daemon.pid > /mnt/sdcard/cubegm/logs/mtp_hwtest_pid_%s.txt 2>/dev/null; "
+        "cat /mnt/sdcard/cubegm/logs/usb_mtp.log > /mnt/sdcard/cubegm/logs/mtp_hwtest_log_%s.txt 2>/dev/null; "
+        "dmesg | grep -i -E 'usb|musb|udc|gadget|ffs|mtp' | tail -n 100 > /mnt/sdcard/cubegm/logs/mtp_hwtest_dmesg_%s.txt 2>/dev/null; "
+        "sync",
+        ts,ts,ts,ts);
+    system(cmd);
+    ui_toast_show("Logs exported to cubegm/logs");
+}
+
+static void handle_mtp_test_submenu(void) {
+    if (input_was_pressed(FROG_BTN_UP)) {
+        mtp_test_idx = (mtp_test_idx - 1 + 3) % 3;
+    }
+    if (input_was_pressed(FROG_BTN_DOWN)) {
+        mtp_test_idx = (mtp_test_idx + 1) % 3;
+    }
+    if (input_was_pressed(FROG_BTN_A)) {
+        if (mtp_test_idx == 0) {
+            system("nohup /mnt/sdcard/cubegm/usb/usb_mtp.sh start > /dev/null 2>&1 &");
+            ui_toast_show("MTP: Starting...");
+        } else if (mtp_test_idx == 1) {
+            system("nohup /mnt/sdcard/cubegm/usb/usb_mtp.sh stop > /dev/null 2>&1 &");
+            ui_toast_show("MTP: Stopping...");
+        } else if (mtp_test_idx == 2) {
+            mtp_export_logs();
+        }
+    }
+    if (input_was_pressed(FROG_BTN_B)) {
+        mtp_test_active = false;
+        return;
+    }
+    if (input_was_pressed(FROG_BTN_Y) && mtp_test_idx == 2) {
+        mtp_export_logs();
+    }
+}
+
+static void render_mtp_test_submenu(void) {
+    if (banner_is_loaded())
+        banner_render(framebuffer);
+    else
+        render_clear_screen(framebuffer);
+    render_header(framebuffer, "USB MTP TEST (DEV)");
+    char line[160];
+    int y = START_Y;
+    const char *st = mtp_dev_status_label();
+    int running = mtp_daemon_running();
+    int bound = mtp_gadget_bound();
+    snprintf(line,sizeof line,"Status: %s", st);
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, line, COLOR_TEXT);
+    y += ITEM_HEIGHT;
+    snprintf(line,sizeof line,"Daemon: %s", running?"running":"stopped");
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, line, COLOR_TEXT);
+    y += ITEM_HEIGHT;
+    snprintf(line,sizeof line,"Gadget: %s", bound?"bound":"unbound");
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, line, COLOR_TEXT);
     y += ITEM_HEIGHT + UI_S(8);
-    const char *opts[2] = {"Connect USB", "Disconnect USB"};
-    for (int i = 0; i < 2; i++) {
+    const char *opts[3] = {"Start MTP (A)", "Stop MTP (A)", "Export Debug Logs (A/Y)"};
+    for (int i=0;i<3;i++) {
         int ry = y + i * ITEM_HEIGHT;
-        if (i == usb_submenu_idx)
+        if (i == mtp_test_idx)
             render_text_pillbox(framebuffer, PADDING, ry, opts[i], COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
         else
             font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, ry, opts[i], COLOR_TEXT);
     }
+    y += 3*ITEM_HEIGHT + UI_S(8);
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, "B: Back  A: Execute  Y: Export", COLOR_HEADER);
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
 
@@ -2428,16 +2551,24 @@ static void handle_settings_menu(void) {
             break;
         case RT_USB:
             usb_submenu_active = true;
-            usb_submenu_idx = 0;
+            break;
+        case RT_MTP_TEST:
+            mtp_test_active = true;
+            mtp_test_idx = 0;
             break;
         default: break;
         }
-        if (r->type != RT_USB) settings_preview_row(r);
+        if (r->type != RT_USB && r->type != RT_MTP_TEST) settings_preview_row(r);
     }
     if (input_was_pressed(FROG_BTN_A) &&
         settings_rows[settings_menu_idx].type == RT_USB) {
         usb_submenu_active = true;
-        usb_submenu_idx = 0;
+        return;
+    }
+    if (input_was_pressed(FROG_BTN_A) &&
+        settings_rows[settings_menu_idx].type == RT_MTP_TEST) {
+        mtp_test_active = true;
+        mtp_test_idx = 0;
         return;
     }
     if (input_was_pressed(FROG_BTN_A) &&
@@ -2893,6 +3024,12 @@ static void render_system_grid(uint16_t *fb) {
 static void handle_input(void) {
     input_update();
 
+    /* L1+X: export MTP/USB logs (diagnostics without entering a menu) */
+    if (input_was_pressed(FROG_BTN_L1) && input_was_pressed(FROG_BTN_X)) {
+        mtp_export_logs();
+        return;
+    }
+
     /* Search keyboard overlay */
     if (search_kbd_active) {
         handle_search_kbd();
@@ -2914,6 +3051,12 @@ static void handle_input(void) {
     /* USB submenu overlay */
     if (usb_submenu_active) {
         handle_usb_submenu();
+        return;
+    }
+
+    /* MTP test overlay (Developer Tools, validation only) */
+    if (mtp_test_active) {
+        handle_mtp_test_submenu();
         return;
     }
 
@@ -3379,6 +3522,9 @@ static void render_settings_menu(void) {
     for (int i = 0; i < vis; i++) {
         int idx = soff + i;
         const SRow *r = &settings_rows[idx];
+        /* Hide developer section when flag not present */
+        if ((r->type == RT_HEADER && strcmp(r->label,"DEVELOPER")==0 && !mtp_dev_is_available()) ||
+            (r->type == RT_MTP_TEST && !mtp_dev_is_available())) continue;
         int y = START_Y + i * ITEM_HEIGHT;
         if (r->type == RT_HEADER) {
             /* Category divider: TreeFrogUI ">> " marker, accent color, no pillbox,
@@ -3398,6 +3544,7 @@ static void render_settings_menu(void) {
         case RT_TOGGLE: snprintf(line, sizeof line, "%s: < %s >", r->label, onoff_names[*r->val]); break;
         case RT_RANGE:  snprintf(line, sizeof line, "%s: < %d%% >", r->label, *r->val); break;
         case RT_USB:    snprintf(line, sizeof line, "%s: < %s >", r->label, usb_status_label()); break;
+        case RT_MTP_TEST: snprintf(line, sizeof line, "%s: < %s >", r->label, mtp_dev_status_label()); break;
         default:        snprintf(line, sizeof line, "%s", r->label); break;   /* RT_ACTION */
         }
         /* Options sit indented under their ">> HEADER" so the grouping reads
@@ -3623,7 +3770,7 @@ void retro_run(void) {
      * sampling input at roughly 1kHz. Search/picker/remap overlays remain
      * continuously drawn for now. */
     int can_skip_idle = !(search_kbd_active || core_picker_active ||
-                          remap_wizard_active || usb_submenu_active);
+                          remap_wizard_active || usb_submenu_active || mtp_test_active);
     int redraw = 1;
     if (can_skip_idle) {
         static unsigned last_sig = 0; static int first = 1;
@@ -3632,8 +3779,8 @@ void retro_run(void) {
         sig = sig*33u + (unsigned)view_transition_frame;
         sig = sig*33u + (unsigned)settings_menu_active;
         sig = sig*33u + (unsigned)usb_submenu_active;
+        sig = sig*33u + (unsigned)mtp_test_active;
         if (usb_submenu_active) {
-            sig = sig*33u + (unsigned)usb_submenu_idx;
             {
                 FILE *uf = fopen(USB_STATUS_FILE, "r");
                 if (uf) {
@@ -3644,6 +3791,20 @@ void retro_run(void) {
                     fclose(uf);
                 }
             }
+        } else if (mtp_test_active) {
+            sig = sig*33u + (unsigned)mtp_test_idx;
+            {
+                FILE *uf = fopen(USB_STATUS_FILE, "r");
+                if (uf) {
+                    char ub[32] = {0};
+                    if (fgets(ub, sizeof ub, uf)) {
+                        for (char *p = ub; *p; p++) sig = sig*33u + (unsigned char)*p;
+                    }
+                    fclose(uf);
+                }
+            }
+            sig = sig*33u + (unsigned)mtp_daemon_running();
+            sig = sig*33u + (unsigned)mtp_gadget_bound();
         } else if (settings_menu_active) {
             sig = sig*33u + (unsigned)settings_menu_idx;
             sig = sig*33u + (unsigned)settings_theme_idx;
@@ -3692,6 +3853,8 @@ void retro_run(void) {
         render_remap_wizard();
     } else if (usb_submenu_active) {
         render_usb_submenu();
+    } else if (mtp_test_active) {
+        render_mtp_test_submenu();
     } else if (settings_menu_active) {
         render_settings_menu();
     } else if (viewing_recents && settings_game_switcher) {
