@@ -72,6 +72,7 @@ static const ConsoleMapping console_mappings[] = {
     {"SFC",    CORES_PATH "/snes9x2005_plus_libretro.so"},
     /* Game Boy */
     {"gb",     CORES_PATH "/gambatte_libretro.so"},
+    {"gbc",    CORES_PATH "/gambatte_libretro.so"},
     {"gbgb",   CORES_PATH "/gearboy_libretro.so"},
     {"gbb",    CORES_PATH "/tgbdual_libretro.so"},
     {"dblcherrygb", CORES_PATH "/gambatte_libretro.so"},
@@ -160,6 +161,7 @@ static const ConsoleMapping console_mappings[] = {
     {"tic80",  CORES_PATH "/tic80_libretro.so"},   /* TIC-80 fantasy console (.tic carts) */
     {"gme",    CORES_PATH "/gme_libretro.so"},
     {"m2k",    CORES_PATH "/mame2000_libretro.so"},
+    {"arcade", CORES_PATH "/mame2000_libretro.so"},
     {"cps1",   CORES_PATH "/fbalpha2012_cps1_libretro.so"},    /* Capcom CPS-1 (FBA 2012) */
     {"cps2",   CORES_PATH "/fbalpha2012_cps2_libretro.so"},    /* Capcom CPS-2 (FBA 2012) */
     {"cps3",   CORES_PATH "/fbalpha2012_cps3_libretro.so"},    /* Capcom CPS-3 (FBA 2012, experimental: heavy) */
@@ -1170,7 +1172,8 @@ static const SystemLabel system_labels[] = {
     {"nest", "NES - Nestopia"}, {"fds", "Famicom Disk System"},
     {"sfc", "Super Nintendo"}, {"snes", "Super Nintendo"},
     {"snes02", "SNES - Fast"},
-    {"gb", "Game Boy"}, {"gbgb", "Game Boy - Gearboy"},
+    {"gb", "Game Boy"}, {"gbc", "Game Boy Color"},
+    {"gbgb", "Game Boy - Gearboy"},
     {"gbb", "Game Boy - TGB Dual"}, {"dblcherrygb", "Double Cherry GB"},
     {"gba", "Game Boy Advance"}, {"gbac", "GBA - Multicore"},
     {"gbav", "GBA - VBA Next"}, {"gbaf", "GBA - mGBA"},
@@ -1186,7 +1189,7 @@ static const SystemLabel system_labels[] = {
     {"ps", "PlayStation"}, {"psx", "PlayStation"},
     {"ps1", "PlayStation"}, {"ps1r", "PlayStation - ReARMed"},
     {"psp", "PlayStation Portable"},
-    {"m2k", "Arcade - MAME 2000"}, {"cps1", "Arcade - Capcom CPS-1"},
+    {"arcade", "Arcade"}, {"m2k", "Arcade - MAME 2000"}, {"cps1", "Arcade - Capcom CPS-1"},
     {"cps2", "Arcade - Capcom CPS-2"}, {"cps3", "Arcade - Capcom CPS-3"},
     {"c64", "Commodore 64"}, {"c64sc", "Commodore 64"},
     {"c64f", "Commodore 64 - Frodo"}, {"c64fc", "Commodore 64 - Frodo"},
@@ -1258,10 +1261,16 @@ static void load_banner_for_view(const char *path, bool is_recents, bool is_favo
         const char *base = (path && *path) ? strrchr(path, '/') : NULL;
         const char *name = base ? base + 1 : (path ? path : "main");
         if (!name || !*name) name = "main";
-        for (int i = 0; exts[i]; i++) {
-            snprintf(img, sizeof(img), "%s/%s.%s", banner_dir, name, exts[i]);
-            if (access(img, R_OK) == 0) { banner_load_fit(img, settings_wallpaper_fit, COLOR_BG); return; }
-        }
+        /* Theme packs historically used m2k/gb names. Keep those assets
+         * working for the canonical arcade and Game Boy Color folders too. */
+        const char *names[] = { name,
+            strcasecmp(name, "arcade") == 0 ? "m2k" : NULL,
+            strcasecmp(name, "gbc") == 0 ? "gb" : NULL, NULL };
+        for (int n = 0; names[n]; n++)
+            for (int i = 0; exts[i]; i++) {
+                snprintf(img, sizeof(img), "%s/%s.%s", banner_dir, names[n], exts[i]);
+                if (access(img, R_OK) == 0) { banner_load_fit(img, settings_wallpaper_fit, COLOR_BG); return; }
+            }
         /* Fallback: try main.png for any view that has no folder-specific image */
         for (int i = 0; exts[i]; i++) {
             snprintf(img, sizeof(img), "%s/main.%s", banner_dir, exts[i]);
