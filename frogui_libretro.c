@@ -53,7 +53,7 @@ static char g_roms_path[64] = ROMS_PATH_DEFAULT;
 #define EBOOK_BIN    SDCARD_BASE "/cubegm/ebook"        /* MuPDF ebook reader (epub/mobi/pdf) */
 #define VIDEO_BIN    SDCARD_BASE "/cubegm/video_player" /* hardware-decoded video player */
 #define IMAGE_BIN    SDCARD_BASE "/cubegm/image_viewer" /* hardware-decoded image viewer */
-#define FROGSHELL_BIN SDCARD_BASE "/cubegm/frogshell"   /* offline SD file manager */
+#define FROGSHELL_CORE CORES_PATH "/frogshell_libretro.so" /* file manager via picoarch */
 
 /* Console → core mapping (folder name → libretro .so)
  * Folder names match /mnt/sdcard/roms/ subdirectories (gb300_multicore convention). */
@@ -151,9 +151,9 @@ static const ConsoleMapping console_mappings[] = {
     {"ebook",  EBOOK_BIN},
     {"videos", VIDEO_BIN},                          /* MP4/MKV/AVI/etc. (standalone) */
     {"video",  VIDEO_BIN},
-    {"music",  ROCKBOX_BIN},                        /* MP3/etc. in Rockbox */
-    {"audio",  ROCKBOX_BIN},
-    {"frogshell", FROGSHELL_BIN},
+    {"music",  VIDEO_BIN},                          /* folder-based simple music player */
+    {"audio",  VIDEO_BIN},
+    {"frogshell", FROGSHELL_CORE},
     {"images", IMAGE_BIN},                          /* JPG/PNG/BMP/GIF/etc. (standalone) */
     {"photos", IMAGE_BIN},
     {"fake08", CORES_PATH "/fake08_libretro.so"},   /* legacy folder name */
@@ -262,6 +262,7 @@ static const ExtensionMapping ext_mappings[] = {
     {".mpeg", VIDEO_BIN},
     {".ts",   VIDEO_BIN},
     {".webm", VIDEO_BIN},
+    {".wmv",  VIDEO_BIN},
     {".mp3",  VIDEO_BIN},
     {".m4a",  VIDEO_BIN},
     {".aac",  VIDEO_BIN},
@@ -1212,7 +1213,7 @@ static const SystemLabel system_labels[] = {
     {"arduous", "Arduboy - Accurate"}, {"vec", "Vectrex"},
     {"o2em", "Odyssey 2"}, {"gme", "Game Music"},
     {"gong", "Pong"}, {"vapor", "VaporSpec"}, {"rockbox", "Rockbox"},
-    {"music", "Rockbox"}, {"audio", "Rockbox"}, {"videos", "Videos"},
+    {"music", "Music Player"}, {"audio", "Music Player"}, {"videos", "Videos"},
     {"video", "Videos"}, {"images", "Images"}, {"photos", "Images"}
 };
 
@@ -1580,13 +1581,33 @@ static int switcher_savestate_bmp(const char *full_path, char *out, size_t n) {
     *sl = 0;
     char *tagsl = strrchr(dir, '/'); const char *tag = tagsl ? tagsl + 1 : dir;
     char *dot = strrchr(base, '.'); if (dot) *dot = 0;     /* strip extension */
-    /* dedicated per-game last-screen snapshot (written on exit) first */
-    snprintf(out, n, "/mnt/sdcard/picoarch/%s/%s.scr.bmp", tag, base);
-    if (access(out, F_OK) == 0) return 1;
-    for (int slot = 9; slot >= 0; slot--) {                 /* then save states, prefer slot 9 */
-        snprintf(out, n, "/mnt/sdcard/picoarch/%s/%s.st%d.bmp", tag, base, slot);
-        if (access(out, F_OK) == 0) return 1;
+    /* The ROM browser preserves the card's folder spelling (often NES),
+     * while picoarch's config tag is normalized to lowercase (nes).  Probe
+     * both forms; otherwise valid .scr.bmp files silently fall back to art. */
+    char lower_tag[sizeof base];
+    size_t tag_len = strlen(tag);
+    if (tag_len >= sizeof lower_tag) tag_len = sizeof lower_tag - 1;
+    for (size_t i = 0; i < tag_len; i++)
+        lower_tag[i] = (char)tolower((unsigned char)tag[i]);
+    lower_tag[tag_len] = '\0';
+    const char *tags[2] = { tag, lower_tag };
+    for (int ti = 0; ti < 2; ti++) {
+        if (ti == 1 && !strcasecmp(tags[0], tags[1])) continue;
+        /* dedicated per-game last-screen snapshot (written on menu entry) */
+        snprintf(out, n, "/mnt/sdcard/picoarch/%s/%s.scr.bmp", tags[ti], base);
+        if (access(out, F_OK) == 0) {
+            dbg("recents: using gameplay screenshot");
+            return 1;
+        }
+        for (int slot = 9; slot >= 0; slot--) {             /* then save states */
+            snprintf(out, n, "/mnt/sdcard/picoarch/%s/%s.st%d.bmp", tags[ti], base, slot);
+            if (access(out, F_OK) == 0) {
+                dbg("recents: using save-state screenshot");
+                return 1;
+            }
+        }
     }
+    dbg("recents: no screenshot found");
     return 0;
 }
 
@@ -1975,7 +1996,7 @@ static int games_tab_entry_count = 0;
 typedef struct { const char *key; const char *label; const char *folder_a; const char *folder_b; const char *bin; } AppEntry;
 static const AppEntry app_defs[] = {
     {"activity", "Activity Tracker", NULL, NULL, NULL},
-    {"frogshell", "FrogShell", NULL, NULL, FROGSHELL_BIN},
+    {"frogshell", "FrogShell", NULL, NULL, FROGSHELL_CORE},
     {"ebook", "Ebook Reader", "Ebook", "ebooks", NULL},
     {"images", "Image Viewer", "images", "photos", NULL},
     {"videos",  "Videos",  "videos",  "video", NULL},
@@ -2181,6 +2202,7 @@ static void write_picoarch_skin(void) {
     fprintf(s, "text_color=0x%06X\n",     rgb565_to_888(theme_text()));
     fprintf(s, "selection_color=0x%06X\n", rgb565_to_888(theme_select_bg()));
     fprintf(s, "sel_text_color=0x%06X\n",  rgb565_to_888(theme_select_text()));
+    fprintf(s, "background_color=0x%06X\n", rgb565_to_888(theme_bg()));
     fclose(s);
 }
 
@@ -2224,7 +2246,7 @@ static void request_standalone_launch(const char *bin_path, const char *rom_path
     /* Media playback is an app, not a game: keep MP3/video launches out of
      * Recents so that list remains useful for actual games. */
     if (strcmp(bin_path, ROCKBOX_BIN) != 0 && strcmp(bin_path, VIDEO_BIN) != 0 &&
-        strcmp(bin_path, FROGSHELL_BIN) != 0) {
+        strcmp(bin_path, FROGSHELL_CORE) != 0) {
         dbg("standalone_launch: calling recent_games_add");
         recent_games_add(bin_path, game_name, rom_path);
     } else {
@@ -2256,7 +2278,6 @@ static bool is_standalone_bin(const char *name) {
                     strcmp(name, PICO286_BIN)  == 0 ||
                     strcmp(name, LGPT_BIN)     == 0 ||
                     strcmp(name, ROCKBOX_BIN)  == 0 ||
-                    strcmp(name, FROGSHELL_BIN)== 0 ||
                     strcmp(name, EBOOK_BIN)    == 0 ||
                     strcmp(name, VIDEO_BIN)    == 0 ||
                     strcmp(name, IMAGE_BIN)    == 0);
@@ -3149,7 +3170,10 @@ static void handle_input(void) {
                 ui_transition_start(1);
                 enter_activity_view();
             } else if (app_index >= 0 && app_defs[app_index].bin && access(app_defs[app_index].bin, X_OK) == 0) {
-                request_standalone_launch(app_defs[app_index].bin, ROMS_PATH);
+                if (!strcmp(app_defs[app_index].bin, FROGSHELL_CORE))
+                    request_game_launch(FROGSHELL_CORE, FROGSHELL_CORE);
+                else
+                    request_standalone_launch(app_defs[app_index].bin, ROMS_PATH);
             } else if (app_index >= 0 && app_folder_path(app_index, app_path, sizeof app_path)) {
                 ui_transition_start(1);
                 strncpy(current_path, app_path, MAX_PATH_LEN - 1);
