@@ -54,6 +54,7 @@ static char g_roms_path[64] = ROMS_PATH_DEFAULT;
 #define VIDEO_BIN    SDCARD_BASE "/cubegm/video_player" /* hardware-decoded video player */
 #define IMAGE_BIN    SDCARD_BASE "/cubegm/image_viewer" /* hardware-decoded image viewer */
 #define FROGSHELL_CORE CORES_PATH "/frogshell_libretro.so" /* file manager via picoarch */
+#define USB_MODE_BIN SDCARD_BASE "/cubegm/usb_mtp.sh"  /* expose the SD card to a USB host */
 
 /* Console → core mapping (folder name → libretro .so)
  * Folder names match /mnt/sdcard/roms/ subdirectories (gb300_multicore convention). */
@@ -417,6 +418,7 @@ static int view_transition_frame = VIEW_TRANSITION_FRAMES + 1;
 static int is_app_folder_name(const char *name);
 static char ui_toast_text[96] = "";
 static int ui_toast_frames = 0;
+static int usb_mode_confirm_frames = 0;
 static void ui_toast_show(const char *text);
 static void ui_transition_start(int direction);
 #define SYSTEM_CAROUSEL_FRAMES 12
@@ -1157,6 +1159,7 @@ static int is_image_library_path(const char *path) {
 #define SETTINGS_ENTRY_NAME    ">> Settings"
 #define RECENTS_ENTRY_NAME     ">> Recents"
 #define FAVOURITES_ENTRY_NAME  ">> Favourites"
+#define USB_MODE_ENTRY_NAME    ">> USB mode"
 
 typedef struct {
     const char *folder;
@@ -1221,6 +1224,7 @@ static const char *system_display_name(const char *folder) {
     if (strcmp(folder, SETTINGS_ENTRY_NAME) == 0) return "Settings";
     if (strcmp(folder, RECENTS_ENTRY_NAME) == 0) return "Recent Games";
     if (strcmp(folder, FAVOURITES_ENTRY_NAME) == 0) return "Favourites";
+    if (strcmp(folder, USB_MODE_ENTRY_NAME) == 0) return "USB mode";
     if (!settings_friendly_names) return folder;
     for (size_t i = 0; i < sizeof(system_labels) / sizeof(system_labels[0]); i++)
         if (strcasecmp(folder, system_labels[i].folder) == 0)
@@ -1528,7 +1532,7 @@ static void scan_directory(const char *path) {
      * real top-level tabs and must never appear as fake system folders. */
     if (strcmp(path, ROMS_PATH) == 0) {
         int has_favs    = favorites_get_count()    > 0 ? 1 : 0;
-        int extras = has_favs;
+        int extras = has_favs + 1; /* USB mode is always available at the root. */
         while (entry_count + extras > entry_capacity) {
             entry_capacity = entry_capacity ? entry_capacity*2 : INITIAL_ENTRIES_CAPACITY;
             entries = realloc(entries, entry_capacity * sizeof(DirEntry));
@@ -1541,6 +1545,10 @@ static void scan_directory(const char *path) {
             entries[0].is_dir = 0;
             entry_count++;
         }
+        strncpy(entries[entry_count].name, USB_MODE_ENTRY_NAME, 255);
+        entries[entry_count].name[255] = '\0';
+        entries[entry_count].is_dir = 0;
+        entry_count++;
     }
 done:
     if (!entries) entry_count = 0;   /* belt: renderer must never walk NULL */
@@ -2257,6 +2265,19 @@ static void request_standalone_launch(const char *bin_path, const char *rom_path
     dbg("standalone_launch: after environ_cb");
 }
 
+/* Built-in utilities use the standalone exec contract but are not games and
+ * therefore must not create Recents entries. */
+static void request_builtin_launch(const char *bin_path) {
+    dbg("builtin_launch: start");
+    fb1_clear_all();
+    FILE *f = fopen(LAUNCH_FILE, "w");
+    if (!f) { dbg("builtin_launch: fopen failed"); return; }
+    fprintf(f, "standalone\n%s\n\n", bin_path);
+    fclose(f);
+    sync();
+    if (environ_cb) environ_cb(RETRO_ENVIRONMENT_SHUTDOWN, NULL);
+}
+
 static bool is_ps1_folder(const char *folder) {
     if (!folder) return false;
     return strcasecmp(folder, "ps1") == 0 ||
@@ -2757,7 +2778,8 @@ static void render_system_carousel(uint16_t *fb) {
     int show_select =
         strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
         strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
-        strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0;
+        strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0 &&
+        strcmp(entries[selected_index].name, USB_MODE_ENTRY_NAME) != 0;
     render_legend(fb, LEGEND_X_NONE, show_select, 1);
 
     if (system_carousel_frame <= SYSTEM_CAROUSEL_FRAMES)
@@ -2802,6 +2824,7 @@ static const char *system_icon_path(const char *folder, char *path, size_t size)
     /* Master System is stored as SMS on some cards, while the icon packs use
      * the shared Game Gear/Master System artwork key (gg). */
     else if (strcasecmp(folder, "sms") == 0) key = "gg";
+    else if (strcmp(folder, USB_MODE_ENTRY_NAME) == 0) key = "usbmode";
     if (settings_icon_pack_idx > 0 && settings_icon_pack_idx < icon_pack_count)
         snprintf(path, size, BANNER_DIR "/icon-packs/%s/%s.png",
                  icon_pack_files[settings_icon_pack_idx], key);
@@ -2999,7 +3022,8 @@ static void render_system_grid(uint16_t *fb) {
     int show_select =
         strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
         strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
-        strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0;
+        strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0 &&
+        strcmp(entries[selected_index].name, USB_MODE_ENTRY_NAME) != 0;
     render_legend(fb, LEGEND_X_NONE, show_select, 1);
 }
 
@@ -3064,7 +3088,8 @@ static void handle_input(void) {
         selected_index < entry_count &&
         strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
         strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
-        strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0) {
+        strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0 &&
+        strcmp(entries[selected_index].name, USB_MODE_ENTRY_NAME) != 0) {
         const char *cur;
         if (entries[selected_index].is_dir) {
             snprintf(core_picker_key, sizeof(core_picker_key), "%s/%s",
@@ -3120,7 +3145,8 @@ static void handle_input(void) {
         } else if (!viewing_recents && !entries[selected_index].is_dir &&
                    strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
                    strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
-                   strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0) {
+                   strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0 &&
+                   strcmp(entries[selected_index].name, USB_MODE_ENTRY_NAME) != 0) {
             /* Toggle favourite for current ROM */
             const char *folder = get_console_folder(current_path);
             const char *core   = get_core_for_folder(folder);
@@ -3206,6 +3232,16 @@ static void handle_input(void) {
         } else if (strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) == 0) {
             ui_transition_start(1);
             enter_recents_view();
+        } else if (strcmp(entries[selected_index].name, USB_MODE_ENTRY_NAME) == 0) {
+            if (access(USB_MODE_BIN, X_OK) != 0) {
+                ui_toast_show("USB mode is unavailable");
+            } else if (usb_mode_confirm_frames > 0) {
+                request_builtin_launch(USB_MODE_BIN);
+            } else {
+                ui_toast_show("UI unavailable; eject on PC before unplugging. A again");
+                ui_toast_frames = 240;
+                usb_mode_confirm_frames = 240;
+            }
         } else if (entries[selected_index].is_dir) {
             ui_transition_start(1);
             char new_path[MAX_PATH_LEN];
@@ -3608,6 +3644,7 @@ static void render_search_kbd(void) {
 }
 
 void retro_run(void) {
+    if (usb_mode_confirm_frames > 0) usb_mode_confirm_frames--;
     /* Take input from the libretro frontend (rkgame feeds cores this way; the
      * cubevol joy_key shm isn't updated when rkgame owns evdev). Build FrogUI's
      * raw bit layout from the joypad → input_set_ext_raw (OR'd with shm). */
@@ -3685,6 +3722,9 @@ void retro_run(void) {
             } else if (strcmp(current_path, ROMS_PATH) == 0 &&
                        strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) == 0) {
                 banner_path = "favourites";
+            } else if (strcmp(current_path, ROMS_PATH) == 0 &&
+                       strcmp(entries[selected_index].name, USB_MODE_ENTRY_NAME) == 0) {
+                banner_path = "usbmode";
             } else if (entries[selected_index].is_dir && strcmp(current_path, ROMS_PATH) == 0) {
                 snprintf(sel_path, sizeof(sel_path), "%s/%s",
                          current_path, entries[selected_index].name);
@@ -3872,7 +3912,8 @@ void retro_run(void) {
             !entries[selected_index].is_dir &&
             strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
             strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
-            strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0) {
+            strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0 &&
+            strcmp(entries[selected_index].name, USB_MODE_ENTRY_NAME) != 0) {
             char fp[1024];
             snprintf(fp, sizeof fp, "%s/%s", current_path, entries[selected_index].name);
             render_boxart_panel(framebuffer, fp, entries[selected_index].name);
@@ -3886,7 +3927,8 @@ void retro_run(void) {
                    !entries[selected_index].is_dir &&
                    strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
                    strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
-                   strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0) {
+                   strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0 &&
+                   strcmp(entries[selected_index].name, USB_MODE_ENTRY_NAME) != 0) {
             const char *folder = get_console_folder(current_path);
             const char *core   = get_core_for_folder(folder);
             if (!core) core = get_core_for_extension(entries[selected_index].name);
@@ -3906,7 +3948,8 @@ void retro_run(void) {
                            selected_index < entry_count &&
                            strcmp(entries[selected_index].name, SETTINGS_ENTRY_NAME) != 0 &&
                            strcmp(entries[selected_index].name, RECENTS_ENTRY_NAME) != 0 &&
-                           strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0);
+                           strcmp(entries[selected_index].name, FAVOURITES_ENTRY_NAME) != 0 &&
+                           strcmp(entries[selected_index].name, USB_MODE_ENTRY_NAME) != 0);
         /* X opens search in the normal browser (systems root + any game folder). */
         int show_search = (!viewing_recents && !viewing_favourites && !viewing_search);
 
