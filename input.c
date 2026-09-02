@@ -59,9 +59,59 @@ const char *input_btn_name(FrogButton btn) {
     return btn_names[btn];
 }
 
+/* FN capability — mirrors picoarch's sf3000_fn_capability_init() semantics.
+ * The physical FN button is only confirmed on the R36SX family (raw bit 16);
+ * other devices (SF3000/SF3500/GB350/SF3100/R36HD-class clones) must not get an
+ * FN default mapping nor an FN wizard step, or they would be asked to map a
+ * button they do not have and any unrelated bit 16 signal would be read as FN.
+ * Detection: TF_DEVICE=R36SX from the boot env file zhijack writes
+ * (/tmp/tfdevice.env), falling back to the inherited TF_DEVICE env var.
+ * Overrides (both directions, same as picoarch): SF3000_HAS_FN env var and
+ * /mnt/sdcard/fn_enable flag file. Raw bit 16 itself stays data-driven: if FN
+ * is not mapped, the bit is simply inert. */
+bool input_fn_available(void) {
+    static int available = -1;
+    if (available >= 0) return available != 0;
+
+    int has = 0;
+    const char *tfdev = getenv("TF_DEVICE");
+    if (tfdev && strcmp(tfdev, "R36SX") == 0) has = 1;
+    else {
+        FILE *tf = fopen("/tmp/tfdevice.env", "r");
+        if (tf) {
+            char line[128];
+            while (fgets(line, sizeof line, tf)) {
+                if (strstr(line, "TF_DEVICE=R36SX")) { has = 1; break; }
+            }
+            fclose(tf);
+        }
+    }
+    const char *ev = getenv("SF3000_HAS_FN");
+    if (ev && (ev[0]=='1' || ev[0]=='y' || ev[0]=='Y')) has = 1;
+    else if (ev && (ev[0]=='0' || ev[0]=='n' || ev[0]=='N')) has = 0;
+    FILE *f = fopen("/mnt/sdcard/fn_enable", "r");
+    if (f) {
+        char c;
+        if (fread(&c, 1, 1, f) == 1) {
+            if (c=='1' || c=='y' || c=='Y') has = 1;
+            else if (c=='0' || c=='n' || c=='N') has = 0;
+        }
+        fclose(f);
+    }
+
+    available = has;
+    return has != 0;
+}
+
 void input_reset_defaults(void) {
     for (int i = 0; i < FROG_BTN_COUNT; i++)
         remap_bits[i] = default_bits[i];
+    /* FN defaults to raw bit 16 only on devices that have the button; on
+     * everything else it ships unmapped (-1 = inert). A saved FN=<bit> line is
+     * likewise ignored at load time on FN-less devices (bit 16 there is an
+     * unrelated signal, not FN). */
+    if (!input_fn_available())
+        remap_bits[FROG_BTN_FN] = -1;
     rebuild_masks();
 }
 
@@ -206,6 +256,10 @@ int input_load_remap(const char *path) {
         int val = atoi(eq + 1);
         for (int i = 0; i < FROG_BTN_COUNT; i++) {
             if (strcmp(line, btn_names[i]) == 0) {
+                /* Ignore a saved FN mapping on devices without the button (e.g.
+                 * a keymap written on an R36SX SD reused elsewhere) — bit 16
+                 * there is an unrelated signal, not FN. */
+                if (i == FROG_BTN_FN && !input_fn_available()) break;
                 remap_bits[i] = val;
                 break;
             }

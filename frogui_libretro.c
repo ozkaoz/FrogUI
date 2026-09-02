@@ -2402,6 +2402,14 @@ static void handle_core_picker(void) {
     }
 }
 
+/* Wizard covers every button except FN, which is only probed on devices that
+ * have the physical button (device detection, see input_fn_available). FN is
+ * the last enum entry, so on FN-less devices the wizard finishes right after
+ * SELECT and never asks for a button that isn't there. */
+static int remap_wizard_count(void) {
+    return FROG_BTN_COUNT - (input_fn_available() ? 0 : 1);
+}
+
 static void handle_remap_wizard(void) {
     uint32_t raw   = input_get_raw_state();
     uint32_t risen = raw & ~remap_prev_raw;
@@ -2416,7 +2424,7 @@ static void handle_remap_wizard(void) {
     if (skip || pressed_bit >= 0) {
         if (!skip) input_set_raw_bit((FrogButton)remap_step, pressed_bit);
         remap_step++;
-        if (remap_step >= FROG_BTN_COUNT) {
+        if (remap_step >= remap_wizard_count()) {
             remap_wizard_active = false;
             input_save_remap(KEYMAP_FILE);
             ui_toast_show("Button mapping saved");
@@ -3473,7 +3481,7 @@ static void render_remap_wizard(void) {
 
     char line[128];
     int y = START_Y;
-    snprintf(line, sizeof(line), "Press  %s  (%d / %d)", input_btn_name((FrogButton)remap_step), remap_step + 1, FROG_BTN_COUNT);
+    snprintf(line, sizeof(line), "Press  %s  (%d / %d)", input_btn_name((FrogButton)remap_step), remap_step + 1, remap_wizard_count());
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, line, COLOR_TEXT);
 
     y += ITEM_HEIGHT;

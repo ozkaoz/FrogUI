@@ -47,7 +47,7 @@ bool input_is_pressed(FrogButton btn);
 bool input_was_pressed(FrogButton btn);   /* true only on rising edge this frame */
 bool input_repeat(FrogButton btn);        /* edge, then auto-repeats while held (time-based) */
 
-/* Raw cubevol value (bits 0..16 inclusive, mask 0x1FFFF) needed by remap wizard. (needed by remap wizard). */
+/* Raw cubevol value (bits 0..16 inclusive, mask 0x1FFFF) needed by remap wizard. */
 uint32_t input_get_raw_state(void);
 void input_set_ext_raw(uint32_t raw);
 
@@ -55,6 +55,11 @@ void input_set_ext_raw(uint32_t raw);
 void input_reset_defaults(void);
 void input_set_raw_bit(FrogButton btn, int raw_bit);
 int  input_get_raw_bit(FrogButton btn);
+
+/* True when this device has the physical FN button (R36SX family, detected
+ * via TF_DEVICE; see input.c). Gates the FN default mapping and the FN step
+ * of the mapping wizard. */
+bool input_fn_available(void);
 
 /* Persist/restore keymap file.  Returns 0 on success, -1 on error/not-found. */
 int  input_load_remap(const char *path);
