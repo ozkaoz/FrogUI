@@ -448,6 +448,11 @@ static char core_picker_key[MAX_PATH_LEN];   /* ROM path (per-game) or folder pa
 static char core_picker_title[160];          /* shown under header */
 
 static void dbg(const char *msg) {
+    /* Mirror zhijack's opt-in diagnostics convention.  Writing every UI
+     * startup step to FAT on normal boots is needless wear and noise. */
+    static int enabled = -1;
+    if (enabled < 0) enabled = access("/mnt/sdcard/log.txt", F_OK) == 0;
+    if (!enabled) return;
     FILE *f = fopen("/mnt/sdcard/frogui_crash.log", "a");
     if (f) { fputs(msg, f); fputs("\n", f); fclose(f); }
     fprintf(stderr, "FROGUI_DBG: %s\n", msg);
