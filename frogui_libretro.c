@@ -440,12 +440,16 @@ static int  core_picker_scroll = 0;
 static int  core_picker_current = 0;   /* index of the ACTIVE core (marked ">>") */
 static char core_picker_key[MAX_PATH_LEN];   /* ROM path (per-game) or folder path */
 static char core_picker_title[160];          /* shown under header */
-/* Extension-filter section of the picker (PS1 family). Drawn ABOVE the core
- * list so it reads as its own block:
- *   ">> EXTENSIONS"     section header (not selectable)
- *   "Filter files: ON"  master toggle
- *   "[x] .cue" ...     one checkbox per candidate extension */
+/* Extension-filter section of the picker (PS1 family). The picker shows two
+ * collapsible sections, each with a selectable ">> " header:
+ *   ">> Cores [-]"          core rows (Default (auto), each core)
+ *   ">> EXTENSIONS [-]"     "Filter files: ON" master toggle + "[x] .cue"
+ * LEFT/RIGHT (or A) on a header collapses/expands its section so long lists
+ * can be skipped quickly. The active core keeps a "* " marker — ">> " is
+ * reserved for section headers. */
 static bool extf_in_picker = false;
+static bool extf_cores_open = true;   /* ">> Cores" section expanded */
+static bool extf_exts_open  = true;   /* ">> EXTENSIONS" section expanded */
 static char extf_folder[32] = "";      /* system folder the picker filters */
 static char extf_path[MAX_PATH_LEN];   /* full SD path of that folder */
 static bool extf_inside = false;        /* picker opened on a file inside it */
@@ -2426,27 +2430,53 @@ static void handle_search_kbd(void) {
 #define PICKER_ROWS ((VISIBLE_ENTRIES - 1) < 1 ? 1 : (VISIBLE_ENTRIES - 1))
 #define EXTF_POOL_N ((int)(sizeof(extf_pool) / sizeof(extf_pool[0])) - 1)
 
-/* Selectable rows only, in draw order: the filter block (header row 0 is NOT
- * selectable), then the cores. Returns the selectable count; `sel` maps a
- * selectable index -> "physical" picker row. Physical layout with the filter
- * block: 0 header | 1 toggle | 2..2+N checkboxes | then cores — every
- * selectable row is exactly header+1, so phys = sel+1 throughout. */
-static int picker_rows(int sel, int *phys_out) {
-    int sel_count = core_choice_count + (extf_in_picker ? 1 + EXTF_POOL_N : 0);
-    if (phys_out)
-        *phys_out = extf_in_picker ? sel + 1 : sel;
-    return sel_count;
+/* Flat model of a picker row, rebuilt on every open/section toggle. Both
+ * section headers are selectable: LEFT/RIGHT (or A) on ">> Cores" / 
+ * ">> EXTENSIONS" collapses/expands that section so long core lists can be
+ * skipped with one press. */
+enum {
+    PR_CORE_HDR,   /* ">> Cores [-]" section header */
+    PR_CORE,       /* "Default (auto)" / one core per row */
+    PR_EXT_HDR,    /* ">> EXTENSIONS [-]" section header (filter folders only) */
+    PR_EXT_TOGGLE, /* "Filter files: ON/OFF" */
+    PR_EXT_BOX     /* "[x] .cue" */
+};
+typedef struct { int type; int core; int ext; } PickerRow;
+static PickerRow picker_rows_buf[256];
+static int picker_rows_n = 0;
+
+static void picker_rows_build(void) {
+    int n = 0;
+    picker_rows_buf[n].type = PR_CORE_HDR; picker_rows_buf[n].core = -1; picker_rows_buf[n].ext = -1; n++;
+    if (extf_cores_open)
+        for (int i = 0; i < core_choice_count; i++) {
+            if (n >= (int)(sizeof(picker_rows_buf)/sizeof(picker_rows_buf[0]))) break;
+            picker_rows_buf[n].type = PR_CORE; picker_rows_buf[n].core = i; picker_rows_buf[n].ext = -1; n++;
+        }
+    if (extf_in_picker) {
+        if (n >= (int)(sizeof(picker_rows_buf)/sizeof(picker_rows_buf[0]))) { picker_rows_n = n; return; }
+        picker_rows_buf[n].type = PR_EXT_HDR; picker_rows_buf[n].core = -1; picker_rows_buf[n].ext = -1; n++;
+        if (extf_exts_open) {
+            if (n >= (int)(sizeof(picker_rows_buf)/sizeof(picker_rows_buf[0]))) { picker_rows_n = n; return; }
+            picker_rows_buf[n].type = PR_EXT_TOGGLE; picker_rows_buf[n].core = -1; picker_rows_buf[n].ext = -1; n++;
+            for (int e = 0; e < EXTF_POOL_N; e++) {
+                if (n >= (int)(sizeof(picker_rows_buf)/sizeof(picker_rows_buf[0]))) break;
+                picker_rows_buf[n].type = PR_EXT_BOX; picker_rows_buf[n].core = -1; picker_rows_buf[n].ext = e; n++;
+            }
+        }
+    }
+    picker_rows_n = n;
 }
 
-/* Selectable rows that fit on screen: the subtitle always eats one slot and
- * the ">> EXTENSIONS" header eats one more while the filter block is shown. */
-static int picker_visible_rows(void) {
-    return extf_in_picker ? PICKER_ROWS - 1 : PICKER_ROWS;
+/* Move the cursor onto the (first) row of the given type after a rebuild. */
+static void picker_cursor_to(int type) {
+    for (int i = 0; i < picker_rows_n; i++)
+        if (picker_rows_buf[i].type == type) { core_picker_idx = i; break; }
 }
 
 static void handle_core_picker(void) {
-    int total = picker_rows(-1, NULL);
-    int vis = picker_visible_rows();
+    picker_rows_build();
+    int total = picker_rows_n;
     if (input_was_pressed(FROG_BTN_UP)) {
         core_picker_idx = (core_picker_idx - 1 + total) % total;
     }
@@ -2454,31 +2484,51 @@ static void handle_core_picker(void) {
         core_picker_idx = (core_picker_idx + 1) % total;
     }
     if (input_was_pressed(FROG_BTN_LEFT)) {
-        core_picker_idx -= vis;
-        if (core_picker_idx < 0) core_picker_idx = 0;
+        int t = picker_rows_buf[core_picker_idx].type;
+        if (t == PR_CORE_HDR || t == PR_EXT_HDR) {
+            if (t == PR_CORE_HDR) extf_cores_open = !extf_cores_open;
+            else                 extf_exts_open  = !extf_exts_open;
+            picker_rows_build();
+            total = picker_rows_n;
+            picker_cursor_to(t);   /* stay on the header we just flipped */
+        } else {
+            core_picker_idx -= PICKER_ROWS;
+            if (core_picker_idx < 0) core_picker_idx = 0;
+        }
     }
     if (input_was_pressed(FROG_BTN_RIGHT)) {
-        core_picker_idx += vis;
-        if (core_picker_idx >= total) core_picker_idx = total - 1;
+        int t = picker_rows_buf[core_picker_idx].type;
+        if (t == PR_CORE_HDR || t == PR_EXT_HDR) {
+            if (t == PR_CORE_HDR) extf_cores_open = true;
+            else                 extf_exts_open  = true;
+            picker_rows_build();
+            total = picker_rows_n;
+        } else {
+            core_picker_idx += PICKER_ROWS;
+            if (core_picker_idx >= total) core_picker_idx = total - 1;
+        }
     }
     if (core_picker_idx < core_picker_scroll)
         core_picker_scroll = core_picker_idx;
-    if (core_picker_idx >= core_picker_scroll + vis)
-        core_picker_scroll = core_picker_idx - vis + 1;
+    if (core_picker_idx >= core_picker_scroll + PICKER_ROWS)
+        core_picker_scroll = core_picker_idx - PICKER_ROWS + 1;
     if (input_was_pressed(FROG_BTN_A)) {
-        int phys;
-        picker_rows(core_picker_idx, &phys);
-        if (extf_in_picker && phys >= 1 && phys < 2 + EXTF_POOL_N) {
-            /* Filter block rows apply immediately and keep the picker open
-             * so several boxes can be flipped in one visit. */
-            if (phys == 1)
-                ext_filter_set_enabled(extf_folder,
-                                       !ext_filter_get_enabled(extf_folder));
-            else
-                ext_filter_toggle_ext(extf_folder, extf_pool[phys - 2]);
+        int t = picker_rows_buf[core_picker_idx].type;
+        if (t == PR_CORE_HDR || t == PR_EXT_HDR) {
+            /* A on a header flips its section (same as LEFT). */
+            if (t == PR_CORE_HDR) extf_cores_open = !extf_cores_open;
+            else                 extf_exts_open  = !extf_exts_open;
+            picker_rows_build();
+            total = picker_rows_n;
+            picker_cursor_to(t);
+        } else if (t == PR_EXT_TOGGLE) {
+            ext_filter_set_enabled(extf_folder, !ext_filter_get_enabled(extf_folder));
             extf_dirty = true;
-        } else {
-            int cidx = extf_in_picker ? phys - (2 + EXTF_POOL_N) : phys;
+        } else if (t == PR_EXT_BOX) {
+            ext_filter_toggle_ext(extf_folder, extf_pool[picker_rows_buf[core_picker_idx].ext]);
+            extf_dirty = true;
+        } else if (t == PR_CORE) {
+            int cidx = picker_rows_buf[core_picker_idx].core;
             core_override_set(core_picker_key, core_choices[cidx].path);
             ui_toast_show(cidx == 0 ? "Core override cleared" : "Core saved for this item");
             core_picker_active = false;
@@ -3115,8 +3165,13 @@ static void handle_input(void) {
                      entries[selected_index].name);
             cur = core_override_lookup(core_picker_key, NULL);
         }
+        /* Cursor lands on the active core's row (or the first core row when
+         * the section is collapsed). */
         core_picker_idx = core_choice_index_for_path(cur);
-        core_picker_current = core_picker_idx;   /* the active core, marked ">>" */
+        core_picker_current = core_picker_idx;   /* the active core, marked "* " */
+        extf_cores_open = true;
+        extf_exts_open = true;
+        core_picker_idx += 1;                    /* +1: ">> Cores" header row */
         core_picker_scroll = 0;
         if (core_picker_idx >= PICKER_ROWS)
             core_picker_scroll = core_picker_idx - PICKER_ROWS + 1;
@@ -3620,46 +3675,59 @@ static void render_core_picker(void) {
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, core_picker_title, COLOR_TEXT);
     y += ITEM_HEIGHT;
 
-    /* Draw the window of selectable rows [scroll, scroll+vis). Each selectable
-     * row maps to a physical row: with the filter block present, physical =
-     * sel+1 (row 0 is the ">> EXTENSIONS" header, drawn whenever the toggle
-     * row itself is in view, so the block never appears headless). */
-    int total = picker_rows(-1, NULL);
-    int vis = picker_visible_rows();
-    if (extf_in_picker && core_picker_scroll < 1 + EXTF_POOL_N) {
-        char hdr[96];
-        snprintf(hdr, sizeof(hdr), ">> %s", "EXTENSIONS");
-        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y,
-                       hdr, COLOR_SELECT_BG);
-        y += ITEM_HEIGHT;
-    }
-    for (int i = 0; i < vis; i++) {
-        int sel = core_picker_scroll + i;
-        if (sel >= total) break;
-        int phys;
-        picker_rows(sel, &phys);
+    /* Draw the window of rows [scroll, scroll+PICKER_ROWS). Section headers
+     * draw like Settings dividers but stay selectable: the pillbox cursor
+     * lands on them, LEFT/RIGHT/A collapse or expand their section. */
+    int total = picker_rows_n;
+    for (int i = 0; i < PICKER_ROWS; i++) {
+        int idx = core_picker_scroll + i;
+        if (idx >= total) break;
+        const PickerRow *r = &picker_rows_buf[idx];
         char line[96];
-        if (extf_in_picker && phys >= 1 && phys < 2 + EXTF_POOL_N) {
-            if (phys == 1)
-                snprintf(line, sizeof(line), "Filter files: %s",
-                         ext_filter_get_enabled(extf_folder) ? "ON" : "OFF");
-            else
-                snprintf(line, sizeof(line), "[%c] .%s",
-                         ext_filter_has_ext(extf_folder, extf_pool[phys - 2]) ? 'x' : ' ',
-                         extf_pool[phys - 2]);
-        } else {
-            int cidx = extf_in_picker ? phys - (2 + EXTF_POOL_N) : phys;
-            if (cidx >= core_choice_count) break;
+        switch (r->type) {
+        case PR_CORE_HDR:
+            snprintf(line, sizeof(line), ">> Cores [%s]",
+                     extf_cores_open ? "-" : "+");
+            break;
+        case PR_EXT_HDR:
+            snprintf(line, sizeof(line), ">> EXTENSIONS [%s]",
+                     extf_exts_open ? "-" : "+");
+            break;
+        case PR_EXT_TOGGLE:
+            snprintf(line, sizeof(line), "   Filter files: %s",
+                     ext_filter_get_enabled(extf_folder) ? "ON" : "OFF");
+            break;
+        case PR_EXT_BOX:
+            snprintf(line, sizeof(line), "   [%c] .%s",
+                     ext_filter_has_ext(extf_folder, extf_pool[r->ext]) ? 'x' : ' ',
+                     extf_pool[r->ext]);
+            break;
+        case PR_CORE:
+            /* "* " marks the currently-active core; ">> " is reserved for
+             * the section headers above. */
             snprintf(line, sizeof(line), "%s%s",
-                     cidx == core_picker_current ? ">> " : "   ", core_choices[cidx].name);
+                     r->core == core_picker_current ? "*  " : "   ",
+                     core_choices[r->core].name);
+            break;
+        default:
+            line[0] = '\0';
+            break;
         }
-        if (sel == core_picker_idx)
-            render_text_pillbox(framebuffer, PADDING, y, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-        else
-            font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, line, COLOR_TEXT);
-        y += ITEM_HEIGHT;
+        int ry = y + i * ITEM_HEIGHT;
+        if (r->type == PR_CORE_HDR || r->type == PR_EXT_HDR) {
+            /* headers: accent color; pillbox when the cursor is on them */
+            if (idx == core_picker_idx)
+                render_text_pillbox(framebuffer, PADDING, ry, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+            else
+                font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, ry,
+                               line, COLOR_SELECT_BG);
+        } else if (idx == core_picker_idx) {
+            render_text_pillbox(framebuffer, PADDING, ry, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+        } else {
+            font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, ry, line, COLOR_TEXT);
+        }
     }
-    render_scroll_indicator(framebuffer, total, core_picker_idx, vis);
+    render_scroll_indicator(framebuffer, total, core_picker_idx, PICKER_ROWS);
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
 
