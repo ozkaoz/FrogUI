@@ -43,6 +43,8 @@
  * are case-sensitive on this kernel), create roms/ if neither exists, so the
  * menu ALWAYS has a valid root instead of NULL entries → SIGBUS addr=0. */
 #define ROMS_PATH_DEFAULT SDCARD_BASE "/roms"
+#define OTG_MOUNT_PATH "/media/hdd"
+#define OTG_ROMS_PATH  OTG_MOUNT_PATH "/roms"
 /* The launcher may point FrogUI at a mounted USB disk. */
 static char g_roms_path[512] = ROMS_PATH_DEFAULT;
 #define ROMS_PATH    g_roms_path
@@ -834,6 +836,9 @@ static void theme_sync_artwork_pack(void) {
 int frogui_battery_color_mode(void) { return settings_battery_color; }
 static int settings_game_switcher = 1;  /* recents as box-art carousel: 0=off, 1=on */
 static int settings_load_recents = 0;   /* start FrogUI in the recents view: 0=off, 1=on */
+enum { ROM_SOURCE_SD, ROM_SOURCE_OTG, ROM_SOURCE_COUNT };
+static int settings_rom_source = ROM_SOURCE_SD;
+static const char *rom_source_names[ROM_SOURCE_COUNT] = {"SD", "OTG"};
 static int settings_disable_sleep = 1;  /* live-patch cubevol to disable power sleep: 0=off, 1=on. zhijack reads this at boot; applies after restart. Default ON: R36SX/SF3500-class sleep isn't supported by TreeFrogUI, so ship with it disabled and point users at Quick Resume instead. */
 static int settings_volume = 100;       /* global output volume 0..100 → cubegm/sndgain.txt */
 static const char *filter_names[] = {"nearest", "bilinear"};
@@ -849,7 +854,8 @@ static const char *style_keys[STYLE_COUNT] = {"vertical", "horizontal", "system"
  * adjust, and render code all iterate it. TOGGLE/RANGE point at their int; THEME
  * and FONT are special (dynamic option lists); ACTION opens the remap wizard. */
 typedef enum { RT_HEADER, RT_INFO, RT_TOGGLE, RT_RANGE, RT_THEME, RT_STYLE, RT_FONT, RT_WALLPAPER,
-               RT_WALLFIT, RT_THEME_PACK, RT_ICON_PACK, RT_CACHE_REBUILD, RT_ACTION } SRowType;
+               RT_WALLFIT, RT_THEME_PACK, RT_ICON_PACK, RT_ROM_SOURCE, RT_OTG_STATUS,
+               RT_CACHE_REBUILD, RT_ACTION } SRowType;
 typedef struct {
     SRowType type;
     const char *label;
@@ -877,6 +883,8 @@ static const SRow settings_rows[] = {
     { RT_TOGGLE, "Hide Extensions", &settings_hide_extensions },
     { RT_TOGGLE, "Hide Empty Folders", &settings_hide_empty },
     { RT_HEADER, "LIBRARY" },
+    { RT_ROM_SOURCE, "ROM Source" },
+    { RT_OTG_STATUS, "OTG Storage" },
     { RT_TOGGLE, "Game Switcher", &settings_game_switcher },
     { RT_TOGGLE, "Start in Recents", &settings_load_recents },
     { RT_HEADER, "GAMEPLAY" },
@@ -891,8 +899,36 @@ static const SRow settings_rows[] = {
     { RT_ACTION, "Button Mapping" },
 };
 #define SETTINGS_ROW_N ((int)(sizeof(settings_rows) / sizeof(settings_rows[0])))
+static bool otg_roms_available(void);
+static bool settings_row_visible(int i) {
+    return i >= 0 && i < SETTINGS_ROW_N;
+}
 static int settings_row_selectable(int i) {
-    return i >= 0 && i < SETTINGS_ROW_N && settings_rows[i].type != RT_HEADER && settings_rows[i].type != RT_INFO;
+    if (!settings_row_visible(i)) return 0;
+    if (settings_rows[i].type == RT_ROM_SOURCE) return otg_roms_available();
+    return settings_rows[i].type != RT_HEADER && settings_rows[i].type != RT_INFO &&
+           settings_rows[i].type != RT_OTG_STATUS;
+}
+static int settings_visible_row_count(void) {
+    int count = 0;
+    for (int i = 0; i < SETTINGS_ROW_N; i++) if (settings_row_visible(i)) count++;
+    return count;
+}
+static int settings_visible_row_at(int visible_index) {
+    for (int i = 0; i < SETTINGS_ROW_N; i++) {
+        if (!settings_row_visible(i)) continue;
+        if (visible_index-- == 0) return i;
+    }
+    return -1;
+}
+static int settings_visible_position(int row) {
+    int position = 0;
+    for (int i = 0; i < SETTINGS_ROW_N; i++) {
+        if (!settings_row_visible(i)) continue;
+        if (i == row) return position;
+        position++;
+    }
+    return 0;
 }
 
 static const char *treefrogui_version(void) {
@@ -983,21 +1019,6 @@ static void settings_preview_row(const SRow *r) {
     default:
         break;
     }
-}
-
-/* Resolve an optional external ROM root supplied by usb_host.sh. */
-static void resolve_roms_root(void) {
-    const char *override = getenv("FROGUI_ROMS_PATH");
-    struct stat st;
-    if (override && *override && strlen(override) < sizeof(g_roms_path) &&
-        stat(override, &st) == 0 && S_ISDIR(st.st_mode)) {
-        strncpy(g_roms_path, override, sizeof(g_roms_path) - 1);
-        g_roms_path[sizeof(g_roms_path) - 1] = '\0';
-        while (strlen(g_roms_path) > 1 && g_roms_path[strlen(g_roms_path)-1] == '/')
-            g_roms_path[strlen(g_roms_path)-1] = '\0';
-        return;
-    }
-    strcpy(g_roms_path, ROMS_PATH_DEFAULT);
 }
 
 static void settings_load_file(void) {
@@ -1095,9 +1116,51 @@ static void settings_load_file(void) {
             settings_game_switcher = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "load_recents") == 0) {
             settings_load_recents = (strcmp(val, "on") == 0) ? 1 : 0;
+        } else if (strcmp(line, "rom_source") == 0) {
+            settings_rom_source = (strcasecmp(val, "otg") == 0)
+                                ? ROM_SOURCE_OTG : ROM_SOURCE_SD;
         }
     }
     fclose(f);
+}
+
+/* The rootfs mdev hook mounts a connected OTG drive at /media/hdd. Check both
+ * the mount table and its roms directory so a stale mountpoint never moves the
+ * library away from the internal SD. */
+static bool otg_roms_available(void) {
+    FILE *mounts = fopen("/proc/mounts", "r");
+    char device[256], target[256], fstype[64], options[256];
+    int mounted = 0;
+    struct stat st;
+    if (!mounts) return false;
+    while (fscanf(mounts, "%255s %255s %63s %255s %*d %*d",
+                  device, target, fstype, options) == 4) {
+        if (strcmp(target, OTG_MOUNT_PATH) == 0) { mounted = 1; break; }
+    }
+    fclose(mounts);
+    return mounted && stat(OTG_ROMS_PATH, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+/* FROGUI_ROMS_PATH is retained for development. Normal use selects the SD or
+ * a connected OTG drive through Settings; a missing OTG drive safely falls
+ * back to the internal SD and is never created or modified. */
+static void resolve_roms_root(void) {
+    const char *override = getenv("FROGUI_ROMS_PATH");
+    struct stat st;
+    if (override && *override && strlen(override) < sizeof(g_roms_path) &&
+        stat(override, &st) == 0 && S_ISDIR(st.st_mode)) {
+        strncpy(g_roms_path, override, sizeof(g_roms_path) - 1);
+        g_roms_path[sizeof(g_roms_path) - 1] = '\0';
+        while (strlen(g_roms_path) > 1 && g_roms_path[strlen(g_roms_path)-1] == '/')
+            g_roms_path[strlen(g_roms_path)-1] = '\0';
+        return;
+    }
+    if (settings_rom_source == ROM_SOURCE_OTG && otg_roms_available()) {
+        strncpy(g_roms_path, OTG_ROMS_PATH, sizeof(g_roms_path) - 1);
+        g_roms_path[sizeof(g_roms_path) - 1] = '\0';
+        return;
+    }
+    strcpy(g_roms_path, ROMS_PATH_DEFAULT);
 }
 
 static void settings_save_file(void) {
@@ -1133,6 +1196,7 @@ static void settings_save_file(void) {
     fprintf(f, "battery_color=%s\n", onoff_names[settings_battery_color]);
     fprintf(f, "game_switcher=%s\n", onoff_names[settings_game_switcher]);
     fprintf(f, "load_recents=%s\n", onoff_names[settings_load_recents]);
+    fprintf(f, "rom_source=%s\n", rom_source_names[settings_rom_source]);
     fprintf(f, "disable_sleep=%s\n", onoff_names[settings_disable_sleep]);
     fflush(f);
     fsync(fileno(f));
@@ -2576,6 +2640,9 @@ static void handle_settings_menu(void) {
         case RT_ICON_PACK:
             settings_icon_pack_idx = (settings_icon_pack_idx + delta + icon_pack_count) % icon_pack_count;
             break;
+        case RT_ROM_SOURCE:
+            settings_rom_source = (settings_rom_source + delta + ROM_SOURCE_COUNT) % ROM_SOURCE_COUNT;
+            break;
         case RT_TOGGLE:
             *r->val = (*r->val + delta + 2) % 2;
             break;
@@ -2618,6 +2685,7 @@ static void handle_settings_menu(void) {
         settings_save_file();
         settings_menu_active = false;
         /* re-scan root so a hide-empty-folders change takes effect now */
+        resolve_roms_root();
         scan_directory(ROMS_PATH);
         strncpy(current_path, ROMS_PATH, MAX_PATH_LEN-1);
         selected_index = 0; scroll_offset = 0;
@@ -3562,15 +3630,18 @@ static void render_settings_menu(void) {
     /* Scroll window so the selected row stays on screen (the list is longer than
      * the panel once headers are added). */
     static int soff = 0;
-    if (settings_menu_idx < soff) soff = settings_menu_idx;
-    if (settings_menu_idx >= soff + VISIBLE_ENTRIES) soff = settings_menu_idx - VISIBLE_ENTRIES + 1;
-    if (soff > SETTINGS_ROW_N - VISIBLE_ENTRIES) soff = SETTINGS_ROW_N - VISIBLE_ENTRIES;
+    int visible_count = settings_visible_row_count();
+    int selected_visible = settings_visible_position(settings_menu_idx);
+    if (selected_visible < soff) soff = selected_visible;
+    if (selected_visible >= soff + VISIBLE_ENTRIES) soff = selected_visible - VISIBLE_ENTRIES + 1;
+    if (soff > visible_count - VISIBLE_ENTRIES) soff = visible_count - VISIBLE_ENTRIES;
     if (soff < 0) soff = 0;
 
-    int vis = SETTINGS_ROW_N - soff;
+    int vis = visible_count - soff;
     if (vis > VISIBLE_ENTRIES) vis = VISIBLE_ENTRIES;
     for (int i = 0; i < vis; i++) {
-        int idx = soff + i;
+        int idx = settings_visible_row_at(soff + i);
+        if (idx < 0) continue;
         const SRow *r = &settings_rows[idx];
         int y = START_Y + i * ITEM_HEIGHT;
         if (r->type == RT_HEADER) {
@@ -3589,6 +3660,16 @@ static void render_settings_menu(void) {
         case RT_WALLFIT:   snprintf(line, sizeof line, "%s: < %s >", r->label, wallpaper_fit_names[settings_wallpaper_fit]); break;
         case RT_THEME_PACK: snprintf(line, sizeof line, "%s: < %s >", r->label, theme_pack_disp[settings_theme_pack_idx]); break;
         case RT_ICON_PACK: snprintf(line, sizeof line, "%s: < %s >", r->label, icon_pack_disp[settings_icon_pack_idx]); break;
+        case RT_ROM_SOURCE:
+            if (otg_roms_available())
+                snprintf(line, sizeof line, "%s: < %s >", r->label, rom_source_names[settings_rom_source]);
+            else
+                snprintf(line, sizeof line, "%s: %s", r->label, rom_source_names[ROM_SOURCE_SD]);
+            break;
+        case RT_OTG_STATUS:
+            snprintf(line, sizeof line, "%s: %s", r->label,
+                     otg_roms_available() ? "connected" : "not connected");
+            break;
         case RT_TOGGLE: snprintf(line, sizeof line, "%s: < %s >", r->label, onoff_names[*r->val]); break;
         case RT_RANGE:  snprintf(line, sizeof line, "%s: < %d%% >", r->label, *r->val); break;
         default:        snprintf(line, sizeof line, "%s", r->label); break;   /* RT_ACTION */
@@ -3598,10 +3679,14 @@ static void render_settings_menu(void) {
         int ix = PADDING + UI_S(16);
         if (settings_menu_idx == idx)
             render_text_pillbox(framebuffer, ix, y, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-        else
-            font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, ix, y, line, COLOR_TEXT);
+        else {
+            int color = (r->type == RT_OTG_STATUS ||
+                         (r->type == RT_ROM_SOURCE && !otg_roms_available()))
+                      ? COLOR_DISABLED : COLOR_TEXT;
+            font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, ix, y, line, color);
+        }
     }
-    render_scroll_indicator(framebuffer, SETTINGS_ROW_N, settings_menu_idx, VISIBLE_ENTRIES);
+    render_scroll_indicator(framebuffer, visible_count, selected_visible, VISIBLE_ENTRIES);
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
 
