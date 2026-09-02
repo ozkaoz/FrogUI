@@ -43,7 +43,8 @@
  * are case-sensitive on this kernel), create roms/ if neither exists, so the
  * menu ALWAYS has a valid root instead of NULL entries → SIGBUS addr=0. */
 #define ROMS_PATH_DEFAULT SDCARD_BASE "/roms"
-static char g_roms_path[64] = ROMS_PATH_DEFAULT;
+/* The launcher may point FrogUI at a mounted USB disk. */
+static char g_roms_path[512] = ROMS_PATH_DEFAULT;
 #define ROMS_PATH    g_roms_path
 #define LAUNCH_FILE  "/tmp/frogui_launch.txt"
 #define PCSX4ALL_BIN SDCARD_BASE "/cubegm/pcsx4all"
@@ -419,6 +420,7 @@ static int is_app_folder_name(const char *name);
 static char ui_toast_text[96] = "";
 static int ui_toast_frames = 0;
 static int usb_mode_confirm_frames = 0;
+static int usb_mode_initiated_frames = 0;
 static void ui_toast_show(const char *text);
 static void ui_transition_start(int direction);
 #define SYSTEM_CAROUSEL_FRAMES 12
@@ -446,7 +448,7 @@ static char core_picker_key[MAX_PATH_LEN];   /* ROM path (per-game) or folder pa
 static char core_picker_title[160];          /* shown under header */
 
 static void dbg(const char *msg) {
-    FILE *f = fopen("/tmp/frogui_crash.log", "a");
+    FILE *f = fopen("/mnt/sdcard/frogui_crash.log", "a");
     if (f) { fputs(msg, f); fputs("\n", f); fclose(f); }
     fprintf(stderr, "FROGUI_DBG: %s\n", msg);
 }
@@ -976,6 +978,21 @@ static void settings_preview_row(const SRow *r) {
     default:
         break;
     }
+}
+
+/* Resolve an optional external ROM root supplied by usb_host.sh. */
+static void resolve_roms_root(void) {
+    const char *override = getenv("FROGUI_ROMS_PATH");
+    struct stat st;
+    if (override && *override && strlen(override) < sizeof(g_roms_path) &&
+        stat(override, &st) == 0 && S_ISDIR(st.st_mode)) {
+        strncpy(g_roms_path, override, sizeof(g_roms_path) - 1);
+        g_roms_path[sizeof(g_roms_path) - 1] = '\0';
+        while (strlen(g_roms_path) > 1 && g_roms_path[strlen(g_roms_path)-1] == '/')
+            g_roms_path[strlen(g_roms_path)-1] = '\0';
+        return;
+    }
+    strcpy(g_roms_path, ROMS_PATH_DEFAULT);
 }
 
 static void settings_load_file(void) {
@@ -3030,6 +3047,31 @@ static void render_system_grid(uint16_t *fb) {
 static void handle_input(void) {
     input_update();
 
+    /* USB mode gets its own confirmation page.  Keeping this modal prevents
+     * the second A press from falling through into the browser (which used to
+     * look like a UI restart) and gives B a reliable cancel path. */
+    if (usb_mode_initiated_frames > 0) {
+        if (input_was_pressed(FROG_BTN_B)) {
+            usb_mode_initiated_frames = 0;
+            return;
+        }
+        if (usb_mode_initiated_frames == 1)
+            request_builtin_launch(USB_MODE_BIN);
+        return;
+    }
+    if (usb_mode_confirm_frames > 0) {
+        if (input_was_pressed(FROG_BTN_B)) {
+            usb_mode_confirm_frames = 0;
+            ui_toast_frames = 0;
+            return;
+        }
+        if (input_was_pressed(FROG_BTN_A)) {
+            usb_mode_confirm_frames = 0;
+            usb_mode_initiated_frames = 120;
+        }
+        return;
+    }
+
     /* Search keyboard overlay */
     if (search_kbd_active) {
         handle_search_kbd();
@@ -3235,11 +3277,8 @@ static void handle_input(void) {
         } else if (strcmp(entries[selected_index].name, USB_MODE_ENTRY_NAME) == 0) {
             if (access(USB_MODE_BIN, X_OK) != 0) {
                 ui_toast_show("USB mode is unavailable");
-            } else if (usb_mode_confirm_frames > 0) {
-                request_builtin_launch(USB_MODE_BIN);
             } else {
-                ui_toast_show("UI unavailable; eject on PC before unplugging. A again");
-                ui_toast_frames = 240;
+                ui_toast_frames = 0;
                 usb_mode_confirm_frames = 240;
             }
         } else if (entries[selected_index].is_dir) {
@@ -3468,7 +3507,8 @@ void retro_init(void) {
     render_init(framebuffer);
     dbg("render_init done");
     /* Resolve the roms root before the first scan (see g_roms_path). */
-    {
+    resolve_roms_root();
+    if (strcmp(g_roms_path, ROMS_PATH_DEFAULT) == 0) {
         DIR *d = opendir(g_roms_path);
         if (d) closedir(d);
         else {
@@ -3476,9 +3516,9 @@ void retro_init(void) {
             if (alt) { closedir(alt); strcpy(g_roms_path, SDCARD_BASE "/ROMS"); }
             else mkdir(g_roms_path, 0777);
         }
-        strncpy(current_path, g_roms_path, MAX_PATH_LEN - 1);
-        current_path[MAX_PATH_LEN - 1] = '\0';
     }
+    strncpy(current_path, g_roms_path, MAX_PATH_LEN - 1);
+    current_path[MAX_PATH_LEN - 1] = '\0';
     scan_directory(current_path);
     dbg("scan_directory done");
     /* Recents reuses entries[] for its own rows. Keep the freshly-built Games
@@ -3643,8 +3683,40 @@ static void render_search_kbd(void) {
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
 
+static void render_usb_confirm(void) {
+    render_clear_screen(framebuffer);
+    render_header(framebuffer, "USB MODE");
+    const char *a = usb_mode_initiated_frames > 0
+                  ? "USB MTP INITIATED"
+                  : "Connect the console to a PC over USB-C";
+    const char *b = usb_mode_initiated_frames > 0
+                  ? "B  BACK"
+                  : "A  CONNECT   B  BACK";
+    if (usb_mode_initiated_frames == 0)
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT,
+                       (SCREEN_WIDTH - font_measure_text(a)) / 2,
+                       SCREEN_HEIGHT / 2 - UI_S(18), a, COLOR_TEXT);
+    const char *pill = usb_mode_initiated_frames > 0 ? "USB MTP INITIATED" : "USB MTP READY";
+    render_text_pillbox(framebuffer, (SCREEN_WIDTH - font_measure_text(pill)) / 2,
+                        SCREEN_HEIGHT / 2 - UI_S(48), pill,
+                        /* Keep the selected-theme contrast pair inside the
+                         * pillbox; COLOR_TEXT can equal the pill background
+                         * on light themes. */
+                        COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT,
+                   (SCREEN_WIDTH - font_measure_text(b)) / 2,
+                   SCREEN_HEIGHT / 2 + UI_S(12), b, COLOR_TEXT);
+    if (usb_mode_initiated_frames > 0) {
+        const char *warn = "Do not disconnect while files are transferring";
+        font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT,
+                       (SCREEN_WIDTH - font_measure_text(warn)) / 2,
+                       SCREEN_HEIGHT / 2 + UI_S(42), warn, COLOR_TEXT);
+    }
+}
+
 void retro_run(void) {
     if (usb_mode_confirm_frames > 0) usb_mode_confirm_frames--;
+    if (usb_mode_initiated_frames > 0) usb_mode_initiated_frames--;
     /* Take input from the libretro frontend (rkgame feeds cores this way; the
      * cubevol joy_key shm isn't updated when rkgame owns evdev). Build FrogUI's
      * raw bit layout from the joypad → input_set_ext_raw (OR'd with shm). */
@@ -3814,7 +3886,7 @@ void retro_run(void) {
         redraw = first || sig != last_sig || banner_is_animating() ||
                  system_carousel_is_animating() ||
                  view_transition_frame <= VIEW_TRANSITION_FRAMES ||
-                 ui_toast_frames > 0;
+                 ui_toast_frames > 0 || usb_mode_confirm_frames > 0 || usb_mode_initiated_frames > 0;
         last_sig = sig; first = 0;
     }
     if (!redraw) {
@@ -3833,7 +3905,9 @@ void retro_run(void) {
      * popup remains available. */
     fb1_clear_battery_zone();
 
-    if (search_kbd_active) {
+    if (usb_mode_confirm_frames > 0 || usb_mode_initiated_frames > 0) {
+        render_usb_confirm();
+    } else if (search_kbd_active) {
         render_search_kbd();
     } else if (core_picker_active) {
         render_core_picker();
