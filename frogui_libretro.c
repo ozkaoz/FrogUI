@@ -442,10 +442,10 @@ static char core_picker_key[MAX_PATH_LEN];   /* ROM path (per-game) or folder pa
 static char core_picker_title[160];          /* shown under header */
 /* Extension-filter section of the picker (PS1 family). The picker shows two
  * collapsible sections, each with a selectable ">> " header:
- *   ">> Cores [-]"          core rows (Default (auto), each core)
- *   ">> EXTENSIONS [-]"     "Filter files: ON" master toggle + "[x] .cue"
+ *   ">> Cores"              core rows (Default (auto), each core)
+ *   ">> EXTENSIONS"         "Filter files: ON" master toggle + "[x] .cue"
  * LEFT/RIGHT (or A) on a header collapses/expands its section so long lists
- * can be skipped quickly. The active core keeps a "* " marker — ">> " is
+ * can be skipped quickly. The active core keeps a "->" marker — ">> " is
  * reserved for section headers. */
 static bool extf_in_picker = false;
 static bool extf_cores_open = true;   /* ">> Cores" section expanded */
@@ -3686,12 +3686,10 @@ static void render_core_picker(void) {
         char line[96];
         switch (r->type) {
         case PR_CORE_HDR:
-            snprintf(line, sizeof(line), ">> Cores [%s]",
-                     extf_cores_open ? "-" : "+");
+            snprintf(line, sizeof(line), ">> %s", "Cores");
             break;
         case PR_EXT_HDR:
-            snprintf(line, sizeof(line), ">> EXTENSIONS [%s]",
-                     extf_exts_open ? "-" : "+");
+            snprintf(line, sizeof(line), ">> %s", "EXTENSIONS");
             break;
         case PR_EXT_TOGGLE:
             snprintf(line, sizeof(line), "   Filter files: %s",
@@ -3703,10 +3701,10 @@ static void render_core_picker(void) {
                      extf_pool[r->ext]);
             break;
         case PR_CORE:
-            /* "* " marks the currently-active core; ">> " is reserved for
+            /* "->" marks the currently-active core; ">> " is reserved for
              * the section headers above. */
             snprintf(line, sizeof(line), "%s%s",
-                     r->core == core_picker_current ? "*  " : "   ",
+                     r->core == core_picker_current ? "-> " : "   ",
                      core_choices[r->core].name);
             break;
         default:
