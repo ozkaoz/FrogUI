@@ -35,6 +35,7 @@ static const int default_bits[FROG_BTN_COUNT] = {
     [FROG_BTN_R2]     = -1,
     [FROG_BTN_START]  = 3,
     [FROG_BTN_SELECT] = 0,
+    [FROG_BTN_FN]     = 16,
 };
 
 static int remap_bits[FROG_BTN_COUNT];
@@ -44,13 +45,13 @@ static uint32_t remap_logical_bits[FROG_BTN_COUNT]; /* precomputed: 1<<logical *
 static void rebuild_masks(void) {
     for (int i = 0; i < FROG_BTN_COUNT; i++) {
         int b = remap_bits[i];
-        remap_raw_masks[i]    = (b >= 0 && b <= 15) ? (1u << b) : 0;
+        remap_raw_masks[i]    = (b >= 0 && b <= FROG_RAW_MAX_BIT) ? (1u << b) : 0;
         remap_logical_bits[i] = 1u << i;
     }
 }
 
 static const char *btn_names[FROG_BTN_COUNT] = {
-    "UP","DOWN","LEFT","RIGHT","A","B","X","Y","L1","R1","L2","R2","START","SELECT"
+    "UP","DOWN","LEFT","RIGHT","A","B","X","Y","L1","R1","L2","R2","START","SELECT","FN"
 };
 
 const char *input_btn_name(FrogButton btn) {
@@ -58,9 +59,59 @@ const char *input_btn_name(FrogButton btn) {
     return btn_names[btn];
 }
 
+/* FN capability — mirrors picoarch's sf3000_fn_capability_init() semantics.
+ * The physical FN button is only confirmed on the R36SX family (raw bit 16);
+ * other devices (SF3000/SF3500/GB350/SF3100/R36HD-class clones) must not get an
+ * FN default mapping nor an FN wizard step, or they would be asked to map a
+ * button they do not have and any unrelated bit 16 signal would be read as FN.
+ * Detection: TF_DEVICE=R36SX from the boot env file zhijack writes
+ * (/tmp/tfdevice.env), falling back to the inherited TF_DEVICE env var.
+ * Overrides (both directions, same as picoarch): SF3000_HAS_FN env var and
+ * /mnt/sdcard/fn_enable flag file. Raw bit 16 itself stays data-driven: if FN
+ * is not mapped, the bit is simply inert. */
+bool input_fn_available(void) {
+    static int available = -1;
+    if (available >= 0) return available != 0;
+
+    int has = 0;
+    const char *tfdev = getenv("TF_DEVICE");
+    if (tfdev && strcmp(tfdev, "R36SX") == 0) has = 1;
+    else {
+        FILE *tf = fopen("/tmp/tfdevice.env", "r");
+        if (tf) {
+            char line[128];
+            while (fgets(line, sizeof line, tf)) {
+                if (strstr(line, "TF_DEVICE=R36SX")) { has = 1; break; }
+            }
+            fclose(tf);
+        }
+    }
+    const char *ev = getenv("SF3000_HAS_FN");
+    if (ev && (ev[0]=='1' || ev[0]=='y' || ev[0]=='Y')) has = 1;
+    else if (ev && (ev[0]=='0' || ev[0]=='n' || ev[0]=='N')) has = 0;
+    FILE *f = fopen("/mnt/sdcard/fn_enable", "r");
+    if (f) {
+        char c;
+        if (fread(&c, 1, 1, f) == 1) {
+            if (c=='1' || c=='y' || c=='Y') has = 1;
+            else if (c=='0' || c=='n' || c=='N') has = 0;
+        }
+        fclose(f);
+    }
+
+    available = has;
+    return has != 0;
+}
+
 void input_reset_defaults(void) {
     for (int i = 0; i < FROG_BTN_COUNT; i++)
         remap_bits[i] = default_bits[i];
+    /* FN defaults to raw bit 16 only on devices that have the button; on
+     * everything else it ships unmapped (-1 = inert). A saved FN=<bit> line is
+     * likewise ignored at load time on FN-less devices (bit 16 there is an
+     * unrelated signal, not FN). */
+    if (!input_fn_available())
+        remap_bits[FROG_BTN_FN] = -1;
     rebuild_masks();
 }
 
@@ -108,18 +159,18 @@ void input_update(void) {
     /* Combine the raw joy_key shm with ext_raw (picoarch's ALREADY-debounced input
      * via input_state_cb). The shm alone flickers from the rkgame+cubevol two-writer
      * race → ghost menu inputs; ORing+debouncing below removes that. */
-    uint32_t raw = (cubevol_keys ? (*cubevol_keys & 0xFFFF) : 0) | (ext_raw & 0xFFFF);
+    uint32_t raw = (cubevol_keys ? (*cubevol_keys & FROG_RAW_BUTTON_MASK) : 0) | (ext_raw & FROG_RAW_BUTTON_MASK);
 
     /* Debounce face bits by ELAPSED TIME, not update count. The redraw-on-demand
      * UI polls near 1kHz between presented frames, so the old 4-update debounce
      * shrank from its intended ~65ms to ~4ms. That allowed the right stick's
      * merged X-bit glitches to open Search while a game list was scrolling.
      * Navigation stays immediate; release always clears immediately. */
-    static long down_since[16] = {0};
+    static long down_since[FROG_RAW_BIT_COUNT] = {0};
     static uint32_t raw_down = 0;
     static uint32_t committed = 0;
     long now = input_now_ms();
-    for (int b = 0; b < 16; b++) {
+    for (int b = 0; b < FROG_RAW_BIT_COUNT; b++) {
         uint32_t m = 1u << b;
         if (raw & m) {
             if (!(raw_down & m)) {
@@ -173,11 +224,11 @@ bool input_repeat(FrogButton btn) {
     return false;
 }
 
-void input_set_ext_raw(uint32_t raw) { ext_raw = raw; }
+void input_set_ext_raw(uint32_t raw) { ext_raw = raw & FROG_RAW_BUTTON_MASK; }
 
 uint32_t input_get_raw_state(void) {
-    uint32_t shm = cubevol_keys ? (*cubevol_keys & 0xFFFF) : 0;
-    return shm | ext_raw;
+    uint32_t shm = cubevol_keys ? (*cubevol_keys & FROG_RAW_BUTTON_MASK) : 0;
+    return (shm | ext_raw) & FROG_RAW_BUTTON_MASK;
 }
 
 void input_set_raw_bit(FrogButton btn, int raw_bit) {
@@ -205,6 +256,10 @@ int input_load_remap(const char *path) {
         int val = atoi(eq + 1);
         for (int i = 0; i < FROG_BTN_COUNT; i++) {
             if (strcmp(line, btn_names[i]) == 0) {
+                /* Ignore a saved FN mapping on devices without the button (e.g.
+                 * a keymap written on an R36SX SD reused elsewhere) — bit 16
+                 * there is an unrelated signal, not FN. */
+                if (i == FROG_BTN_FN && !input_fn_available()) break;
                 remap_bits[i] = val;
                 break;
             }
