@@ -21,6 +21,11 @@ int cube_pmem_volume_read(void);
  * change — call on brightness change / boot, NOT every frame. */
 void cube_pmem_backlight_sync(int level);
 
+/* Mute/unmute the stock I2SO audio path.  The stock GPIO-mute ioctl is unused
+ * on R36SX; cubevol itself mutes by setting its live I2SO volume to zero.
+ * FrogUI has no continuous audio by default, so a game launch unmutes first. */
+void cube_set_i2so_output_muted(int muted);
+
 /* Show or hide the cubevol OSD overlay (/dev/fb1: battery, volume). Frog should
  * always set this to visible on init — picoarch/standalone game code blanks it
  * during gameplay and restores on exit, but if those crash, FrogUI's explicit

@@ -798,6 +798,7 @@ static int settings_brightness = 75;    /* 0..100, step 5 */
  * window outlasts that delayed apply; cubevol then only touches backlight on
  * hotkeys, so our value sticks. */
 static int settings_bl_reassert = 0;
+static int settings_audio_mute_reassert = 0;
 static int settings_filter_idx = 1;     /* forced bilinear (option removed from menu) */
 static int settings_filter_idx_on_enter = 0;  /* snapshot for restart-on-change */
 static int settings_quick_resume = 0;      /* boot straight into last game: 0=off, 1=on. Settings key stays "auto_resume" for upgrade compat. */
@@ -991,6 +992,9 @@ static void settings_apply(void) {
     if (settings_volume < 0)   settings_volume = 0;
     if (settings_volume > 100) settings_volume = 100;
     settings_write_volume();
+    /* FrogUI has no continuous audio unless menu sounds are explicitly enabled.
+       Zeroed samples leave the DAC/amp live; mute its real I2SO output instead. */
+    cube_set_i2so_output_muted(settings_menu_sounds ? 0 : 1);
 }
 
 /* Apply only the setting being previewed. The old generic settings_apply()
@@ -2297,6 +2301,7 @@ static void write_picoarch_skin(void) {
 
 static void request_game_launch(const char *core_path, const char *rom_path) {
     fb1_clear_all();
+    cube_set_i2so_output_muted(0);  /* game owns the audio path after exec */
     write_picoarch_skin();
     FILE *f = fopen(LAUNCH_FILE, "w");
     if (!f) { dbg("failed to write launch file"); return; }
@@ -2319,6 +2324,7 @@ static void request_game_launch(const char *core_path, const char *rom_path) {
 static void request_standalone_launch(const char *bin_path, const char *rom_path) {
     dbg("standalone_launch: start");
     fb1_clear_all();
+    cube_set_i2so_output_muted(0);  /* standalone app owns the audio path */
     write_picoarch_skin();
     FILE *f = fopen(LAUNCH_FILE, "w");
     if (!f) { dbg("standalone_launch: fopen failed"); return; }
@@ -2351,6 +2357,7 @@ static void request_standalone_launch(const char *bin_path, const char *rom_path
 static void request_builtin_launch(const char *bin_path) {
     dbg("builtin_launch: start");
     fb1_clear_all();
+    cube_set_i2so_output_muted(0);  /* built-in standalone app may use audio */
     FILE *f = fopen(LAUNCH_FILE, "w");
     if (!f) { dbg("builtin_launch: fopen failed"); return; }
     fprintf(f, "standalone\n%s\n\n", bin_path);
@@ -3556,6 +3563,7 @@ void retro_init(void) {
     fb1_set_visible(1);   /* leave the live volume/input daemon untouched */
     settings_apply();
     settings_bl_reassert = 120; /* re-assert safety net past cubevol's delayed apply */
+    settings_audio_mute_reassert = settings_menu_sounds ? 0 : 120;
     dbg("settings loaded");
     recent_games_init();
     dbg("recent_games_init done");
@@ -3846,6 +3854,13 @@ void retro_run(void) {
     if (settings_bl_reassert > 0) {
         cube_set_backlight(settings_brightness);
         settings_bl_reassert--;
+    }
+    /* cubevol can restore its stored I2SO level shortly after boot.  Keep the
+       idle launcher mute asserted through that window, without changing the
+       stored level used for the next game launch. */
+    if (settings_audio_mute_reassert > 0) {
+        cube_set_i2so_output_muted(1);
+        settings_audio_mute_reassert--;
     }
 
     /* Reload banner when view, path, or selection changes.

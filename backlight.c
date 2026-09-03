@@ -10,6 +10,7 @@
 struct pmem_req { unsigned short flag, id, len, pad; void *buf; };
 #define PMEM_GET_BACKLIGHT 0x400c2602u
 #define PMEM_SET_BACKLIGHT 0x800c2603u
+#define I2SO_SET_VOLUME    0x8001080bu
 
 /* Level (0..100) → raw backlight byte (23..255). Matches cubevol's own curve so
  * the value we store in persistentmem is what cubevol would store itself. */
@@ -66,6 +67,30 @@ void cube_set_backlight(int level) {
     if (fd < 0) return;
     (void)!write(fd, &out, sizeof(int));
     close(fd);
+}
+
+static void cube_set_i2so_volume(int level) {
+    unsigned char value;
+    if (level < 0) level = 0;
+    if (level > 100) level = 100;
+    value = (unsigned char)level;
+    /* Match cubevol's api_set_volume(): write-only open + this exact ioctl. */
+    int fd = open("/dev/sndC0i2so", O_WRONLY);
+    if (fd < 0) return;
+    (void)ioctl(fd, I2SO_SET_VOLUME, &value);
+    close(fd);
+}
+
+void cube_set_i2so_output_muted(int muted) {
+    /* R36SX cubevol's api_set_i2so_gpio_mute exists but has no callers. Its
+       real set_audio_mute path uses api_set_volume(0), so use that proven
+       control and restore the stock daemon's saved hardware volume on launch. */
+    if (muted) {
+        cube_set_i2so_volume(0);
+    } else {
+        int volume = cube_pmem_volume_read();
+        if (volume >= 0) cube_set_i2so_volume(volume);
+    }
 }
 
 #include <stdlib.h>
