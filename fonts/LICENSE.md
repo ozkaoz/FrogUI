@@ -2,6 +2,11 @@
 
 This directory contains the following fonts and their respective licenses:
 
+TreeFrogUnicode.ttf is a reduced fallback face derived from WenQuanYi Zen Hei
+(Copyright © 2003–2010 Wen Quan Yi Project), distributed under the GNU General
+Public License with font embedding exception. It is used only for Unicode
+glyphs missing from the selected UI font.
+
 ## GamePocket-Regular-ZeroKern.ttf
 Copyright (c) 2022 AbFarid (farid.abbasbayli@gmail.com)
 Licensed under SIL Open Font License, Version 1.1

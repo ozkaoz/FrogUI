@@ -10,6 +10,13 @@ static stbtt_fontinfo font_info;
 static unsigned char *font_buffer = NULL;
 static float font_scale;
 static int font_loaded = 0;
+/* Optional broad-Unicode fallback.  The normal UI font stays small; this
+ * face is loaded only when a string actually contains a glyph the UI font
+ * does not provide. */
+static stbtt_fontinfo fallback_info;
+static unsigned char *fallback_buffer = NULL;
+static float fallback_scale;
+static int fallback_loaded = 0;
 
 #ifndef UI_SCALE
 #define UI_SCALE 100
@@ -106,6 +113,47 @@ void font_init(void) {
         font_load_from_settings("GamePocket");
 }
 
+static int load_fallback_font(void) {
+    const char *paths[] = {
+        "/mnt/sdcard/frogui/fonts/TreeFrogUnicode.ttf",
+        "/mnt/sdcard/cubegm/fonts/TreeFrogUnicode.ttf",
+        "fonts/TreeFrogUnicode.ttf"
+    };
+    FILE *fp = NULL;
+    long size;
+    int i;
+    if (fallback_loaded) return 1;
+    for (i = 0; i < (int)(sizeof(paths) / sizeof(paths[0])); i++) {
+        fp = fopen(paths[i], "rb");
+        if (fp) break;
+    }
+    if (!fp) return 0;
+    fseek(fp, 0, SEEK_END);
+    size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    if (size <= 0 || size > 32 * 1024 * 1024) {
+        fclose(fp);
+        return 0;
+    }
+    fallback_buffer = (unsigned char *)malloc((size_t)size);
+    if (!fallback_buffer || fread(fallback_buffer, 1, (size_t)size, fp) != (size_t)size) {
+        free(fallback_buffer);
+        fallback_buffer = NULL;
+        fclose(fp);
+        return 0;
+    }
+    fclose(fp);
+    if (!stbtt_InitFont(&fallback_info, fallback_buffer,
+                        stbtt_GetFontOffsetForIndex(fallback_buffer, 0))) {
+        free(fallback_buffer);
+        fallback_buffer = NULL;
+        return 0;
+    }
+    fallback_scale = stbtt_ScaleForPixelHeight(&fallback_info, FONT_SIZE);
+    fallback_loaded = 1;
+    return 1;
+}
+
 /* Rasterize glyphs into a static buffer instead of stbtt_GetGlyphBitmap (which
  * mallocs per glyph per frame). On memory-pressured devices those allocs can
  * transiently fail -> draw bails -> glyphs vanish for a frame. Ported from the
@@ -114,12 +162,12 @@ void font_init(void) {
 /* Per-glyph cache: rasterize each character ONCE at the current font scale and
  * reuse it. The old code ran stbtt_MakeGlyphBitmap + GetFontVMetrics for every
  * character every frame, which made scrolling crawl with the larger font. */
-struct gcache_ent { int valid, w, h, xoff, yoff; unsigned char *bmp; };
-static struct gcache_ent gcache[128];
+struct gcache_ent { uint32_t codepoint; int font_id, valid, w, h, xoff, yoff; unsigned char *bmp; };
+static struct gcache_ent gcache[512];
 static float gcache_scale = -1.0f;
 static int   gcache_baseline = 0;
 static void gcache_reset(void) {
-    for (int i = 0; i < 128; i++) { free(gcache[i].bmp); gcache[i].bmp = NULL; gcache[i].valid = 0; }
+    for (int i = 0; i < 512; i++) { free(gcache[i].bmp); gcache[i].bmp = NULL; gcache[i].valid = 0; }
 }
 
 void font_draw_char(uint16_t *framebuffer, int screen_width, int screen_height,
@@ -192,6 +240,89 @@ void font_draw_char(uint16_t *framebuffer, int screen_width, int screen_height,
     }
 }
 
+/* Draw a Unicode codepoint using the primary face when possible and the
+ * bundled broad-Unicode fallback otherwise.  ROM names are UTF-8, not a byte
+ * stream: keeping decoding here also makes measuring and drawing agree. */
+static void font_draw_codepoint(uint16_t *framebuffer, int screen_width,
+                                int screen_height, int x, int y,
+                                uint32_t cp, uint16_t color) {
+    stbtt_fontinfo *info = &font_info;
+    float scale = font_scale;
+    int font_id = 0;
+    int glyph_index;
+    int slot = -1;
+    if (cp < 128) {
+        char c = (char)cp;
+        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+        font_draw_char(framebuffer, screen_width, screen_height, x, y, c, color);
+        return;
+    }
+    if (!font_loaded) return;
+    glyph_index = stbtt_FindGlyphIndex(info, (int)cp);
+    if (!glyph_index) {
+        if (!load_fallback_font()) return;
+        info = &fallback_info;
+        scale = fallback_scale;
+        font_id = 1;
+        glyph_index = stbtt_FindGlyphIndex(info, (int)cp);
+    }
+    if (!glyph_index) return;
+    for (int i = 128; i < 512; i++)
+        if (gcache[i].valid && gcache[i].font_id == font_id && gcache[i].codepoint == cp) { slot = i; break; }
+    if (slot < 0) {
+        for (int i = 128; i < 512; i++) if (!gcache[i].valid) { slot = i; break; }
+    }
+    if (slot < 0) return;
+    struct gcache_ent *g = &gcache[slot];
+    if (!g->valid) {
+        int xoff, yoff, x1, y1;
+        stbtt_GetGlyphBitmapBox(info, glyph_index, scale, scale, &xoff, &yoff, &x1, &y1);
+        g->codepoint = cp; g->font_id = font_id;
+        g->w = x1 - xoff; g->h = y1 - yoff; g->xoff = xoff; g->yoff = yoff;
+        if (g->w <= 0 || g->h <= 0 || g->w > GLYPH_MAX || g->h > GLYPH_MAX) {
+            g->w = g->h = 0;
+        } else {
+            g->bmp = (unsigned char *)malloc((size_t)g->w * g->h);
+            if (!g->bmp) return;
+            stbtt_MakeGlyphBitmap(info, g->bmp, g->w, g->h, g->w, scale, scale, glyph_index);
+        }
+        g->valid = 1;
+    }
+    if (g->w > 0 && g->h > 0) {
+        int ascent, descent, line_gap;
+        int baseline;
+        stbtt_GetFontVMetrics(info, &ascent, &descent, &line_gap);
+        baseline = (int)(ascent * scale);
+        for (int row = 0; row < g->h; row++) for (int col = 0; col < g->w; col++) {
+            unsigned char alpha = g->bmp[row * g->w + col];
+            int px = x + g->xoff + col, py = y + baseline + g->yoff + row;
+            if (alpha && px >= 0 && px < screen_width && py >= 0 && py < screen_height) {
+                uint16_t *dst = &framebuffer[py * screen_width + px];
+                if (alpha == 255) *dst = color;
+                else {
+                    uint16_t bg = *dst;
+                    int fr = (color >> 11) & 31, fg = (color >> 5) & 63, fb = color & 31;
+                    int br = (bg >> 11) & 31, bgc = (bg >> 5) & 63, bb = bg & 31, ia = 255 - alpha;
+                    *dst = (uint16_t)((((fr * alpha + br * ia) / 255) << 11) |
+                                      (((fg * alpha + bgc * ia) / 255) << 5) |
+                                      ((fb * alpha + bb * ia) / 255));
+                }
+            }
+        }
+    }
+}
+
+static uint32_t utf8_next(const char **p) {
+    const unsigned char *s = (const unsigned char *)*p;
+    uint32_t cp;
+    if (s[0] < 0x80) { *p += 1; return s[0]; }
+    if ((s[0] & 0xe0) == 0xc0 && s[1]) { cp = s[0] & 0x1f; cp = (cp << 6) | (s[1] & 0x3f); *p += 2; return cp; }
+    if ((s[0] & 0xf0) == 0xe0 && s[1] && s[2]) { cp = s[0] & 0x0f; cp = (cp << 6) | (s[1] & 0x3f); cp = (cp << 6) | (s[2] & 0x3f); *p += 3; return cp; }
+    if ((s[0] & 0xf8) == 0xf0 && s[1] && s[2] && s[3]) { cp = s[0] & 7; cp = (cp << 6) | (s[1] & 0x3f); cp = (cp << 6) | (s[2] & 0x3f); cp = (cp << 6) | (s[3] & 0x3f); *p += 4; return cp; }
+    *p += 1;
+    return 0xfffd;
+}
+
 /* Vertical metrics for centering: baseline = pixels from glyph-cell top down to
  * the baseline; cap_height = pixel height of capital letters (all text is
  * uppercased, so the visible ink is the cap band [baseline-cap_height, baseline]). */
@@ -217,26 +348,27 @@ void font_draw_text(uint16_t *framebuffer, int screen_width, int screen_height,
     if (!font_loaded || !framebuffer || !text) return;
 
     int start_x = x;
-    int prev_codepoint = 0;
+    int prev_glyph = 0;
 
     while (*text) {
         if (*text == '\n') {
             y += FONT_SIZE + 4;  // Line spacing
             x = start_x;
             text++;
-            prev_codepoint = 0;
+            prev_glyph = 0;
             continue;
         }
 
-        char c = *text;
-
-        // Convert to uppercase
-        if (c >= 'a' && c <= 'z') {
-            c = c - 'a' + 'A';
+        uint32_t cp = utf8_next(&text);
+        if (cp >= 'a' && cp <= 'z') cp -= ('a' - 'A');
+        stbtt_fontinfo *info = &font_info;
+        float scale = font_scale;
+        int glyph_index = stbtt_FindGlyphIndex(info, (int)cp);
+        if (!glyph_index && cp >= 128 && load_fallback_font()) {
+            info = &fallback_info;
+            scale = fallback_scale;
+            glyph_index = stbtt_FindGlyphIndex(info, (int)cp);
         }
-
-        // Get glyph index
-        int glyph_index = stbtt_FindGlyphIndex(&font_info, c);
 
         if (glyph_index != 0) {
             // Get advance width and left side bearing
@@ -244,24 +376,22 @@ void font_draw_text(uint16_t *framebuffer, int screen_width, int screen_height,
             stbtt_GetGlyphHMetrics(&font_info, glyph_index, &advance_width, &left_side_bearing);
 
             // Apply kerning if we have a previous character
-            if (prev_codepoint != 0) {
-                int kern = stbtt_GetGlyphKernAdvance(&font_info, prev_codepoint, glyph_index);
-                x += (int)(kern * font_scale);
+            if (prev_glyph != 0) {
+                int kern = stbtt_GetGlyphKernAdvance(info, prev_glyph, glyph_index);
+                x += (int)(kern * scale);
             }
 
             // Draw the character
-            font_draw_char(framebuffer, screen_width, screen_height, x, y, c, color);
+            font_draw_codepoint(framebuffer, screen_width, screen_height, x, y, cp, color);
 
             // Advance cursor
-            x += (int)(advance_width * font_scale);
-            prev_codepoint = glyph_index;
+            x += (int)(advance_width * scale);
+            prev_glyph = glyph_index;
         } else {
             // Space or unknown character
             x += FONT_CHAR_SPACING;
-            prev_codepoint = 0;
+            prev_glyph = 0;
         }
-
-        text++;
     }
 }
 
@@ -269,47 +399,46 @@ int font_measure_text(const char *text) {
     if (!text || !font_loaded) return 0;
 
     int width = 0;
-    int prev_codepoint = 0;
+    int prev_glyph = 0;
 
     while (*text) {
         // Skip newlines
         if (*text == '\n') {
             text++;
-            prev_codepoint = 0;
+            prev_glyph = 0;
             continue;
         }
 
-        char c = *text;
-
-        // Convert to uppercase
-        if (c >= 'a' && c <= 'z') {
-            c = c - 'a' + 'A';
+        uint32_t cp = utf8_next(&text);
+        if (cp >= 'a' && cp <= 'z') cp -= ('a' - 'A');
+        stbtt_fontinfo *info = &font_info;
+        float scale = font_scale;
+        int glyph_index = stbtt_FindGlyphIndex(info, (int)cp);
+        if (!glyph_index && cp >= 128 && load_fallback_font()) {
+            info = &fallback_info;
+            scale = fallback_scale;
+            glyph_index = stbtt_FindGlyphIndex(info, (int)cp);
         }
-
-        // Get glyph index
-        int glyph_index = stbtt_FindGlyphIndex(&font_info, c);
 
         if (glyph_index != 0) {
             // Get advance width
             int advance_width, left_side_bearing;
-            stbtt_GetGlyphHMetrics(&font_info, glyph_index, &advance_width, &left_side_bearing);
+            stbtt_GetGlyphHMetrics(info, glyph_index, &advance_width, &left_side_bearing);
 
             // Apply kerning if we have a previous character
-            if (prev_codepoint != 0) {
-                int kern = stbtt_GetGlyphKernAdvance(&font_info, prev_codepoint, glyph_index);
-                width += (int)(kern * font_scale);
+            if (prev_glyph != 0) {
+                int kern = stbtt_GetGlyphKernAdvance(info, prev_glyph, glyph_index);
+                width += (int)(kern * scale);
             }
 
             // Add character width
-            width += (int)(advance_width * font_scale);
-            prev_codepoint = glyph_index;
+            width += (int)(advance_width * scale);
+            prev_glyph = glyph_index;
         } else {
             // Space or unknown character
             width += FONT_CHAR_SPACING;
-            prev_codepoint = 0;
+            prev_glyph = 0;
         }
-
-        text++;
     }
 
     return width;
