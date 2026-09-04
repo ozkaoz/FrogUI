@@ -896,6 +896,7 @@ static const SRow settings_rows[] = {
     { RT_TOGGLE, "Center Text", &settings_center_text },
     { RT_TOGGLE, "Friendly System Names", &settings_friendly_names },
     { RT_FONT,   "Font" },
+    { RT_HEADER, "GENERAL" },
     { RT_RANGE,  "Brightness", &settings_brightness, 0, 100, SETTINGS_BRIGHTNESS_STEP },
     { RT_TOGGLE, "Animations", &settings_anim },
     { RT_TOGGLE, "Menu Sounds", &settings_menu_sounds },
@@ -924,35 +925,137 @@ static const SRow settings_rows[] = {
 };
 #define SETTINGS_ROW_N ((int)(sizeof(settings_rows) / sizeof(settings_rows[0])))
 static bool otg_roms_available(void);
-static bool settings_row_visible(int i) {
-    return i >= 0 && i < SETTINGS_ROW_N;
-}
-static int settings_row_selectable(int i) {
-    if (!settings_row_visible(i)) return 0;
-    if (settings_rows[i].type == RT_ROM_SOURCE) return otg_roms_available();
-    return settings_rows[i].type != RT_HEADER && settings_rows[i].type != RT_INFO &&
-           settings_rows[i].type != RT_OTG_STATUS;
-}
-static int settings_visible_row_count(void) {
-    int count = 0;
-    for (int i = 0; i < SETTINGS_ROW_N; i++) if (settings_row_visible(i)) count++;
-    return count;
-}
-static int settings_visible_row_at(int visible_index) {
-    for (int i = 0; i < SETTINGS_ROW_N; i++) {
-        if (!settings_row_visible(i)) continue;
-        if (visible_index-- == 0) return i;
-    }
+
+/* ---- Collapsible settings sections ---------------------------------------
+ * Headers stay dividers for rendering, but the cursor can land on them and
+ * LEFT/RIGHT (or A) collapses/expands their section — same interaction as the
+ * SELECT picker's ">> Cores" / ">> EXTENSIONS". The visible-row list below
+ * is rebuilt whenever a section flips. */
+static const char *settings_section_names[] = { "APPEARANCE", "GENERAL", "LIBRARY", "GAMEPLAY", "SYSTEM", NULL };
+#define SETTINGS_SECTION_N 5
+static bool settings_section_open[SETTINGS_SECTION_N] = { true, true, true, true, true };
+
+/* Map a settings_rows[] header index -> section id (index into
+ * settings_section_names), or -1 when the row is not a known header. */
+static int settings_section_of(int i) {
+    if (i < 0 || i >= SETTINGS_ROW_N || settings_rows[i].type != RT_HEADER) return -1;
+    for (int s = 0; settings_section_names[s]; s++)
+        if (strcmp(settings_rows[i].label, settings_section_names[s]) == 0)
+            return s;
     return -1;
 }
-static int settings_visible_position(int row) {
-    int position = 0;
-    for (int i = 0; i < SETTINGS_ROW_N; i++) {
-        if (!settings_row_visible(i)) continue;
-        if (i == row) return position;
-        position++;
+
+/* ---- Collapsed-state persistence (review feedback) -----------------------
+ * Each category's collapsed/expanded state is stored in the regular
+ * settings file as one compact line ("sections=01011", one digit per
+ * section, 0=collapsed 1=expanded). Default when absent: all expanded.
+ * Saved immediately when the user toggles a section, so the layout comes
+ * back exactly as it was left across reboots and updates. */
+static void settings_sections_save(void) {
+    /* Reuse the same file: read the current contents, replace/append the
+     * sections line, write back. The file is tiny (a few hundred bytes). */
+    char buf[2048];
+    size_t len = 0;
+    FILE *f = fopen(SETTINGS_FILE, "r");
+    if (f) {
+        len = fread(buf, 1, sizeof(buf) - 1, f);
+        fclose(f);
     }
+    buf[len] = '\0';
+
+    char newline[32];
+    snprintf(newline, sizeof newline, "sections=%d%d%d%d%d",
+             settings_section_open[0] ? 1 : 0, settings_section_open[1] ? 1 : 0,
+             settings_section_open[2] ? 1 : 0, settings_section_open[3] ? 1 : 0,
+             settings_section_open[4] ? 1 : 0);
+
+    FILE *out = fopen(SETTINGS_FILE, "w");
+    if (!out) return;
+    int wrote = 0;
+    char *line = buf;
+    while (line && *line) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+        if (strncmp(line, "sections=", 9) == 0) {
+            fputs(newline, out); fputc('\n', out);
+            wrote = 1;
+        } else if (line[0] != '\0' || nl) {
+            fputs(line, out); fputc('\n', out);
+        }
+        line = nl ? nl + 1 : NULL;
+    }
+    if (!wrote) { fputs(newline, out); fputc('\n', out); }
+    fclose(out);
+}
+
+static void settings_sections_load(void) {
+    FILE *f = fopen(SETTINGS_FILE, "r");
+    if (!f) return;
+    char line[256];
+    while (fgets(line, sizeof line, f)) {
+        if (strncmp(line, "sections=", 9) == 0) {
+            const char *d = line + 9;
+            for (int s = 0; s < SETTINGS_SECTION_N && d[s]; s++)
+                settings_section_open[s] = (d[s] == '0') ? false : true;
+            break;
+        }
+    }
+    fclose(f);
+}
+
+/* Visible settings rows: every header plus, per open section, its option
+ * rows. Built on demand; holds indices into settings_rows[]. */
+static int settings_vis_rows[SETTINGS_ROW_N];
+static int settings_vis_n = 0;
+
+static void settings_build_vis_rows(void) {
+    int n = 0;
+    for (int i = 0; i < SETTINGS_ROW_N; i++) {
+        int sec = settings_section_of(i);
+        if (sec >= 0) {
+            settings_vis_rows[n++] = i;                       /* header always visible */
+            if (!settings_section_open[sec]) {
+                /* skip the section's rows in one sweep */
+                while (i + 1 < SETTINGS_ROW_N && settings_section_of(i + 1) < 0)
+                    i++;
+            }
+        } else {
+            settings_vis_rows[n++] = i;
+        }
+    }
+    settings_vis_n = n;
+}
+
+/* Cursor position in the visible list; kept in sync with settings_menu_idx
+ * (which stays an index into settings_rows[]). */
+static int settings_vis_cursor(void) {
+    for (int i = 0; i < settings_vis_n; i++)
+        if (settings_vis_rows[i] == settings_menu_idx) return i;
     return 0;
+}
+
+static bool settings_row_visible(int i) {
+    /* A row is visible unless it sits inside a COLLAPSED section: find the
+     * nearest header above it; if that section is collapsed, the row is
+     * hidden (headers themselves always stay visible). */
+    if (i < 0 || i >= SETTINGS_ROW_N) return false;
+    if (settings_section_of(i) >= 0) return true;   /* header */
+    for (int s = i - 1; s >= 0; s--) {
+        int sec = settings_section_of(s);
+        if (sec >= 0)
+            return settings_section_open[sec];
+    }
+    return true;   /* rows before any header: always visible */
+}
+static int settings_row_selectable(int i) {
+    if (i < 0 || i >= SETTINGS_ROW_N) return 0;
+    if (settings_rows[i].type == RT_ROM_SOURCE) return otg_roms_available();
+    /* Headers are selectable now (they collapse/expand sections). */
+    if (settings_rows[i].type == RT_HEADER) {
+        int sec = settings_section_of(i);
+        return sec >= 0;
+    }
+    return settings_rows[i].type != RT_INFO && settings_rows[i].type != RT_OTG_STATUS;
 }
 
 static const char *treefrogui_version(void) {
@@ -1225,6 +1328,10 @@ static void settings_save_file(void) {
     fprintf(f, "load_recents=%s\n", onoff_names[settings_load_recents]);
     fprintf(f, "rom_source=%s\n", rom_source_names[settings_rom_source]);
     fprintf(f, "disable_sleep=%s\n", onoff_names[settings_disable_sleep]);
+    fprintf(f, "sections=%d%d%d%d%d\n",
+            settings_section_open[0] ? 1 : 0, settings_section_open[1] ? 1 : 0,
+            settings_section_open[2] ? 1 : 0, settings_section_open[3] ? 1 : 0,
+            settings_section_open[4] ? 1 : 0);
     fflush(f);
     fsync(fileno(f));
     fclose(f);
@@ -2286,12 +2393,13 @@ static void switch_main_tab(int target) {
         apps_browsing = false;
         viewing_search = false;
         settings_menu_active = true;
-        if (!settings_row_selectable(settings_menu_idx)) {
-            settings_menu_idx = 0;
-            while (settings_menu_idx < SETTINGS_ROW_N &&
-                   !settings_row_selectable(settings_menu_idx))
-                settings_menu_idx++;
-        }
+        /* Headers are selectable now (they collapse/expand sections); just
+         * make sure the cursor sits on a VISIBLE row. */
+        settings_build_vis_rows();
+        int found = 0;
+        for (int i = 0; i < settings_vis_n; i++)
+            if (settings_vis_rows[i] == settings_menu_idx) { found = 1; break; }
+        if (!found) settings_menu_idx = settings_vis_rows[0];
         settings_filter_idx_on_enter = settings_filter_idx;
     }
 }
@@ -2637,21 +2745,31 @@ static void handle_settings_menu(void) {
     bool left  = input_repeat(FROG_BTN_LEFT);
     bool right = input_repeat(FROG_BTN_RIGHT);
 
-    /* Land on a real option, never a header. */
-    if (!settings_row_selectable(settings_menu_idx)) {
-        settings_menu_idx = 1;
-        while (settings_menu_idx < SETTINGS_ROW_N && !settings_row_selectable(settings_menu_idx))
-            settings_menu_idx++;
+    settings_build_vis_rows();
+    /* Keep the cursor on a visible row (rows hidden by a collapsed section
+     * can no longer be selected, so it can drift off the list). */
+    int cur = settings_vis_cursor();
+    if (settings_vis_rows[cur] != settings_menu_idx) {
+        settings_menu_idx = settings_vis_rows[0];
+        cur = 0;
     }
     if (up) {
-        do { settings_menu_idx = (settings_menu_idx - 1 + SETTINGS_ROW_N) % SETTINGS_ROW_N; }
-        while (!settings_row_selectable(settings_menu_idx));
+        cur = (cur - 1 + settings_vis_n) % settings_vis_n;
+        settings_menu_idx = settings_vis_rows[cur];
     }
     if (down) {
-        do { settings_menu_idx = (settings_menu_idx + 1) % SETTINGS_ROW_N; }
-        while (!settings_row_selectable(settings_menu_idx));
+        cur = (cur + 1) % settings_vis_n;
+        settings_menu_idx = settings_vis_rows[cur];
     }
-    if (left || right) {
+    int sec = settings_section_of(settings_menu_idx);
+    if ((left || right) && sec >= 0) {
+        /* LEFT/RIGHT on a ">>" header collapses/expands its section, same
+         * interaction as the SELECT picker sections. */
+        settings_section_open[sec] = left ? !settings_section_open[sec] : true;
+        settings_sections_save();   /* persist immediately (review request) */
+        settings_build_vis_rows();
+        /* cursor stays on the header we just flipped */
+    } else if (left || right) {
         int delta = right ? 1 : -1;
         const SRow *r = &settings_rows[settings_menu_idx];
         switch (r->type) {
@@ -2692,6 +2810,14 @@ static void handle_settings_menu(void) {
         default: break;
         }
         settings_preview_row(r);
+    }
+    if (input_was_pressed(FROG_BTN_A) && sec >= 0) {
+        /* A on a header flips its section (same as LEFT) and stays in the
+         * menu — it must not fall through to the save/close path below. */
+        settings_section_open[sec] = !settings_section_open[sec];
+        settings_sections_save();   /* persist immediately (review request) */
+        settings_build_vis_rows();
+        return;
     }
     if (input_was_pressed(FROG_BTN_A) &&
         settings_rows[settings_menu_idx].type == RT_CACHE_REBUILD) {
@@ -3609,6 +3735,7 @@ void retro_init(void) {
     theme_init();
     dbg("theme_init done");
     settings_load_file();
+    settings_sections_load();   /* restore the user's collapsed sections */
     /* Sync cubevol's stored backlight before checking the daemon. If it had
      * genuinely died, the replacement reads the right value immediately. */
     cube_pmem_backlight_sync(settings_brightness);
@@ -3687,28 +3814,30 @@ static void render_settings_menu(void) {
     render_tabs(framebuffer, MAIN_TAB_SETTINGS, COLOR_BG);
 
     char line[128];
-    /* Scroll window so the selected row stays on screen (the list is longer than
-     * the panel once headers are added). */
+    /* Scroll window over the VISIBLE rows (collapsed sections shrink the
+     * list) so the selected row always stays on screen. */
+    settings_build_vis_rows();
+    int cur = settings_vis_cursor();
     static int soff = 0;
-    int visible_count = settings_visible_row_count();
-    int selected_visible = settings_visible_position(settings_menu_idx);
-    if (selected_visible < soff) soff = selected_visible;
-    if (selected_visible >= soff + VISIBLE_ENTRIES) soff = selected_visible - VISIBLE_ENTRIES + 1;
-    if (soff > visible_count - VISIBLE_ENTRIES) soff = visible_count - VISIBLE_ENTRIES;
+    if (cur < soff) soff = cur;
+    if (cur >= soff + VISIBLE_ENTRIES) soff = cur - VISIBLE_ENTRIES + 1;
+    if (soff > settings_vis_n - VISIBLE_ENTRIES) soff = settings_vis_n - VISIBLE_ENTRIES;
     if (soff < 0) soff = 0;
 
-    int vis = visible_count - soff;
+    int vis = settings_vis_n - soff;
     if (vis > VISIBLE_ENTRIES) vis = VISIBLE_ENTRIES;
     for (int i = 0; i < vis; i++) {
-        int idx = settings_visible_row_at(soff + i);
-        if (idx < 0) continue;
+        int idx = settings_vis_rows[soff + i];
         const SRow *r = &settings_rows[idx];
         int y = START_Y + i * ITEM_HEIGHT;
         if (r->type == RT_HEADER) {
-            /* Category divider: TreeFrogUI ">> " marker, accent color, no pillbox,
-             * not selectable. */
+            /* Category divider: TreeFrogUI ">> " marker, accent color, no
+             * pillbox when idle ??? but selectable, so pillbox under cursor. */
             snprintf(line, sizeof line, ">> %s", r->label);
-            font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, line, COLOR_SELECT_BG);
+            if (settings_menu_idx == idx)
+                render_text_pillbox(framebuffer, PADDING, y, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+            else
+                font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, line, COLOR_SELECT_BG);
             continue;
         }
         switch (r->type) {
@@ -3746,7 +3875,7 @@ static void render_settings_menu(void) {
             font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, ix, y, line, color);
         }
     }
-    render_scroll_indicator(framebuffer, visible_count, selected_visible, VISIBLE_ENTRIES);
+    render_scroll_indicator(framebuffer, settings_vis_n, cur, VISIBLE_ENTRIES);
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
 
@@ -4015,6 +4144,11 @@ void retro_run(void) {
         sig = sig*33u + (unsigned)settings_menu_active;
         if (settings_menu_active) {
             sig = sig*33u + (unsigned)settings_menu_idx;
+            /* Collapsed/expanded section state: pressing A on a header changes
+             * NO row value and NO cursor index ??? without these bits in the
+             * signature the screen would wait for the next cursor move. */
+            for (int s = 0; s < (int)(sizeof(settings_section_open)/sizeof(settings_section_open[0])); s++)
+                sig = sig*33u + (settings_section_open[s] ? 1u : 0u);
             sig = sig*33u + (unsigned)settings_theme_idx;
             sig = sig*33u + (unsigned)settings_style;
             sig = sig*33u + (unsigned)settings_icon_pack_idx;
