@@ -23,10 +23,12 @@
  * for that folder). Call once at init, before any scan. */
 void ext_filter_load(void);
 
-/* True if `file_name` does NOT match `folder_name`'s active whitelist and
- * should be hidden from the browser. Files with no extension are hidden
- * while the whitelist is active. */
-bool ext_filter_should_hide(const char *folder_name, const char *file_name);
+/* True if `file_ext` (the file's extension, isolated by the caller, with or
+ * without a leading dot, any case) does NOT match `folder_name`'s active
+ * whitelist and should be hidden from the browser. An empty extension is
+ * hidden while the whitelist is active. The folder resolution is cached
+ * (one lookup per scanned directory, not per file). */
+bool ext_filter_should_hide(const char *folder_name, const char *file_ext);
 
 /* True if the folder has an active (enabled, non-empty) whitelist. */
 bool ext_filter_folder_active(const char *folder_name);
@@ -50,5 +52,14 @@ int  ext_filter_get_ext_at(const char *folder_name, int idx, char *out, size_t n
 /* Add/remove an extension (no dot) from the folder's list. Returns true if
  * the list changed. Adding to an empty list enables the filter. */
 bool ext_filter_toggle_ext(const char *folder_name, const char *ext);
+
+/* Add an extension marked as a built-in default (used by the initial PS1
+ * whitelist; such rows can be recognized and shown alongside user-added
+ * ones with the same toggle behavior). */
+void ext_filter_add_builtin(const char *folder_name, const char *ext);
+
+/* True if `ext` in this folder's list came from the built-in defaults
+ * (false for user-typed extensions). */
+bool ext_filter_ext_is_builtin(const char *folder_name, const char *ext);
 
 #endif
