@@ -474,8 +474,12 @@ static bool extf_dirty = false;        /* a filter edit needs a rescan */
  * .bin track blobs (and .chd/.pbp/... dumps): whitelisting the loadable
  * index formats makes each game appear once. */
 static const char *extf_pool[] = {
-    "cue", "bin", "m3u", "pbp", "iso", "chd",
-    "img", "mdf", "sbi", "ccd", "ecm", "exe", NULL
+    /* Common ROM/media extensions.  The picker is available for every
+     * browsable folder; users can add anything else through the keyboard. */
+    "zip", "7z", "cue", "bin", "m3u", "pbp", "iso", "chd",
+    "img", "mdf", "sbi", "ccd", "ecm", "gba", "gb", "gbc", "nes",
+    "smc", "sfc", "md", "gen", "sms", "gg", "pce", "a26", "a78",
+    "lnx", "ws", "wsc", "nds", "cia", "love", "p8", "p8.png", NULL
 };
 
 static void dbg(const char *msg) {
@@ -859,7 +863,7 @@ static int settings_hide_empty = 1;     /* hide rom folders with no games: 0=off
 static int settings_hide_extensions = 1; /* hide file extensions in the browser: 0=off, 1=on */
 static int settings_backgrounds = 1;     /* show per-system background images: 0=off (solid theme bg), 1=on */
 static int settings_background_dim = 15; /* darken background artwork: 0=unchanged, 100=black */
-static int settings_file_cache = 0;      /* cache folder listings (mtime-keyed) for fast nav: 0=off, 1=on */
+static int settings_file_cache = 1;      /* cache folder listings (mtime-keyed) for fast nav: 0=off, 1=on */
 static int settings_battery_color = 0;   /* "Nel Battery Mode": solid color light by level instead of fill bar */
 
 /* Pastel themes are complete treatments, not palette-only options.  Pair
@@ -1258,9 +1262,8 @@ static void settings_load_file(void) {
         } else if (strcmp(line, "file_cache") == 0) {
             settings_file_cache = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "folder_cache") == 0) {
-            /* Legacy builds defaulted this to on. Reset upgrades to the new
-             * off-by-default policy; saving Settings writes file_cache. */
-            settings_file_cache = 0;
+            /* Legacy alias: preserve the user's old cache preference. */
+            settings_file_cache = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "battery_color") == 0) {
             settings_battery_color = (strcmp(val, "on") == 0) ? 1 : 0;
         } else if (strcmp(line, "disable_sleep") == 0) {
@@ -1388,6 +1391,16 @@ static const char* get_console_folder(const char *path) {
         return console;
     }
     return NULL;
+}
+
+/* Extension filters use the current folder name as their stable key.  ROM
+ * paths already resolve through get_console_folder(); app/media folders live
+ * elsewhere on the card, so fall back to the final path component. */
+static const char* get_filter_folder(const char *path) {
+    const char *folder = get_console_folder(path);
+    if (folder && folder[0]) return folder;
+    const char *base = get_basename(path);
+    return (base && base[0]) ? base : NULL;
 }
 
 /* JPG/PNG normally mean frontend artwork and stay hidden from ROM listings.
@@ -1561,7 +1574,7 @@ static int folder_has_games(const char *path, int depth) {
     int found = 0;
     /* get_console_folder returns a static buffer; copy it before recursing. */
     char sys_folder[64];
-    const char *sf = get_console_folder(path);
+    const char *sf = get_filter_folder(path);
     if (sf) { strncpy(sys_folder, sf, sizeof(sys_folder) - 1); sys_folder[sizeof(sys_folder) - 1] = '\0'; }
     else sys_folder[0] = '\0';
     while ((e = readdir(d)) != NULL) {
@@ -1726,7 +1739,7 @@ static void scan_directory(const char *path) {
         /* Static buffer inside get_console_folder: copy before the loop — the
          * hide-empty branch below calls folder_has_games(), which reuses it. */
         char sys_folder[64];
-        const char *sf = get_console_folder(path);
+        const char *sf = get_filter_folder(path);
         if (sf) { strncpy(sys_folder, sf, sizeof(sys_folder) - 1); sys_folder[sizeof(sys_folder) - 1] = '\0'; }
         else sys_folder[0] = '\0';
         int extf_on = ext_filter_folder_active(sys_folder[0] ? sys_folder : NULL);
@@ -3655,8 +3668,11 @@ static void handle_input(void) {
          * the section is collapsed). */
         core_picker_idx = core_choice_index_for_path(cur);
         core_picker_current = core_picker_idx;   /* the active core, marked "* " */
+        /* Keep the SELECT menu compact on entry.  Cores are the common
+         * action; extension filtering remains available under its collapsible
+         * section when needed. */
         extf_cores_open = true;
-        extf_exts_open = true;
+        extf_exts_open = false;
         core_picker_idx += 1;                    /* +1: ">> Cores" header row */
         core_picker_scroll = 0;
         if (core_picker_idx >= PICKER_ROWS)
@@ -3667,7 +3683,9 @@ static void handle_input(void) {
         extf_in_picker = false;
         extf_inside = false;
         if (entries[selected_index].is_dir) {
-            if (ext_filter_has_list(entries[selected_index].name)) {
+            /* Every browsable folder gets the same extension-filter editor;
+             * an empty list simply starts disabled and does not hide files. */
+            {
                 extf_in_picker = true;
                 strncpy(extf_folder, entries[selected_index].name, sizeof(extf_folder) - 1);
                 extf_folder[sizeof(extf_folder) - 1] = '\0';
@@ -3675,8 +3693,8 @@ static void handle_input(void) {
                          current_path, entries[selected_index].name);
             }
         } else {
-            const char *cf = get_console_folder(current_path);
-            if (cf && ext_filter_has_list(cf)) {
+            const char *cf = get_filter_folder(current_path);
+            if (cf) {
                 extf_in_picker = true;
                 extf_inside = true;
                 strncpy(extf_folder, cf, sizeof(extf_folder) - 1);
