@@ -56,6 +56,7 @@ static char g_roms_path[512] = ROMS_PATH_DEFAULT;
 #define EBOOK_BIN    SDCARD_BASE "/cubegm/ebook"        /* MuPDF ebook reader (epub/mobi/pdf) */
 #define VIDEO_BIN    SDCARD_BASE "/cubegm/video_player" /* hardware-decoded video player */
 #define IMAGE_BIN    SDCARD_BASE "/cubegm/image_viewer" /* hardware-decoded image viewer */
+#define PPSSPP_BIN   SDCARD_BASE "/cubegm/ppsspp"       /* optional standalone SF3000 port */
 #define FROGSHELL_CORE CORES_PATH "/frogshell_libretro.so" /* file manager via picoarch */
 #define USB_MODE_BIN SDCARD_BASE "/cubegm/usb_mtp.sh"  /* expose the SD card to a USB host */
 
@@ -2404,6 +2405,10 @@ static bool is_lgpt_folder(const char *folder) {
     return folder && strcasecmp(folder, "lgpt") == 0;
 }
 
+static bool is_psp_folder(const char *folder) {
+    return folder && strcasecmp(folder, "psp") == 0;
+}
+
 /* A standalone-launched binary (run directly, not as a libretro core). */
 static bool is_standalone_bin(const char *name) {
     return name && (strcmp(name, PCSX4ALL_BIN) == 0 ||
@@ -2412,7 +2417,8 @@ static bool is_standalone_bin(const char *name) {
                     strcmp(name, ROCKBOX_BIN)  == 0 ||
                     strcmp(name, EBOOK_BIN)    == 0 ||
                     strcmp(name, VIDEO_BIN)    == 0 ||
-                    strcmp(name, IMAGE_BIN)    == 0);
+                    strcmp(name, IMAGE_BIN)    == 0 ||
+                    strcmp(name, PPSSPP_BIN)   == 0);
 }
 
 /* ----------------------------- Search (X button) ----------------------------- */
@@ -2519,6 +2525,8 @@ static void launch_by_path(const char *path) {
          * caught generically by is_standalone_bin on the resolved core path. */
         if (is_ps1_folder(folder) && access(PCSX4ALL_BIN, F_OK) == 0)
             request_standalone_launch(PCSX4ALL_BIN, path);
+        else if (is_psp_folder(folder) && access(PPSSPP_BIN, X_OK) == 0)
+            request_standalone_launch(PPSSPP_BIN, path);
         else if (is_standalone_bin(core) && access(core, F_OK) == 0)
             request_standalone_launch(core, path);
         else
