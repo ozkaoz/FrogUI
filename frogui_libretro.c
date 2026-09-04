@@ -36,6 +36,7 @@
 #include "backlight.h"
 #include "input.h"
 #include "core_override.h"
+#include "ext_filter.h"
 
 #define SDCARD_BASE  "/mnt/sdcard"
 #define CORES_PATH   SDCARD_BASE "/cubegm/cores"
@@ -455,6 +456,27 @@ static int  core_picker_scroll = 0;
 static int  core_picker_current = 0;   /* index of the ACTIVE core (marked ">>") */
 static char core_picker_key[MAX_PATH_LEN];   /* ROM path (per-game) or folder path */
 static char core_picker_title[160];          /* shown under header */
+/* Extension-filter section of the picker (PS1 family). The picker shows two
+ * collapsible sections, each with a selectable ">> " header:
+ *   ">> Cores"              core rows (Default (auto), each core)
+ *   ">> EXTENSIONS"         "Filter files: ON" master toggle + "[x] .cue"
+ * LEFT/RIGHT (or A) on a header collapses/expands its section so long lists
+ * can be skipped quickly. The active core keeps a "->" marker — ">> " is
+ * reserved for section headers. */
+static bool extf_in_picker = false;
+static bool extf_cores_open = true;   /* ">> Cores" section expanded */
+static bool extf_exts_open  = true;   /* ">> EXTENSIONS" section expanded */
+static char extf_folder[32] = "";      /* system folder the picker filters */
+static char extf_path[MAX_PATH_LEN];   /* full SD path of that folder */
+static bool extf_inside = false;        /* picker opened on a file inside it */
+static bool extf_dirty = false;        /* a filter edit needs a rescan */
+/* Candidate extensions offered for whitelists. PS1 ships games as .cue +
+ * .bin track blobs (and .chd/.pbp/... dumps): whitelisting the loadable
+ * index formats makes each game appear once. */
+static const char *extf_pool[] = {
+    "cue", "bin", "m3u", "pbp", "iso", "chd",
+    "img", "mdf", "sbi", "ccd", "ecm", "exe", NULL
+};
 
 static void dbg(const char *msg) {
     /* Mirror zhijack's opt-in diagnostics convention.  Writing every UI
@@ -1537,6 +1559,11 @@ static int folder_has_games(const char *path, int depth) {
     if (!d) return 0;
     struct dirent *e;
     int found = 0;
+    /* get_console_folder returns a static buffer; copy it before recursing. */
+    char sys_folder[64];
+    const char *sf = get_console_folder(path);
+    if (sf) { strncpy(sys_folder, sf, sizeof(sys_folder) - 1); sys_folder[sizeof(sys_folder) - 1] = '\0'; }
+    else sys_folder[0] = '\0';
     while ((e = readdir(d)) != NULL) {
         if (e->d_name[0] == '.') continue;
         int isdir = dirent_is_dir(path, e);
@@ -1553,6 +1580,10 @@ static int folder_has_games(const char *path, int depth) {
                 (strcasecmp(ext,".csv")==0 || strcasecmp(ext,".txt")==0 ||
                  strcasecmp(ext,".xml")==0 || strcasecmp(ext,".jpg")==0 ||
                  strcasecmp(ext,".png")==0)) continue;
+            /* Extension already isolated once above (review: normalize/resolve
+             * per entry, not per API call) - pass it, or "" when there is none. */
+            if (ext_filter_should_hide(sys_folder[0] ? sys_folder : NULL,
+                                       ext ? ext + 1 : "")) continue;
             found = 1; break;
         }
     }
@@ -1569,7 +1600,9 @@ static int folder_has_games(const char *path, int depth) {
  * then rewrites the cache. Cache lives in frogui/.cache/, never in the rom dirs,
  * and the whole feature is behind settings_file_cache so it can be turned off. */
 #define CACHE_DIR   SETTINGS_DIR "/.cache"
-#define CACHE_MAGIC 0x32435546u    /* "FUC2" */
+#define CACHE_MAGIC 0x33435546u    /* "FUC3" — bumped when the listing content
+                                     * changes WITHOUT the dir mtime moving
+                                     * (e.g. extension-whitelist edits). */
 #define CACHE_MAX_ENTRIES 100000   /* sanity cap to reject a corrupt count */
 
 static void cache_file_for(const char *path, char *out, size_t n) {
@@ -1690,6 +1723,13 @@ static void scan_directory(const char *path) {
     if (!cached) {
         DIR *dir = opendir(path);
         struct dirent *e;
+        /* Static buffer inside get_console_folder: copy before the loop — the
+         * hide-empty branch below calls folder_has_games(), which reuses it. */
+        char sys_folder[64];
+        const char *sf = get_console_folder(path);
+        if (sf) { strncpy(sys_folder, sf, sizeof(sys_folder) - 1); sys_folder[sizeof(sys_folder) - 1] = '\0'; }
+        else sys_folder[0] = '\0';
+        int extf_on = ext_filter_folder_active(sys_folder[0] ? sys_folder : NULL);
         while (dir && (e = readdir(dir)) != NULL) {
             if (e->d_name[0] == '.') continue;
             int isdir = dirent_is_dir(path, e);   /* d_type, stat() only if unknown */
@@ -1703,11 +1743,26 @@ static void scan_directory(const char *path) {
                            (strcasecmp(ext,".csv")==0 || strcasecmp(ext,".txt")==0 ||
                             strcasecmp(ext,".xml")==0 || strcasecmp(ext,".jpg")==0 ||
                             strcasecmp(ext,".png")==0)) continue;
+                /* Per-system extension whitelist (PS1: keep .cue/.m3u/..., hide
+                 * companion .bin track blobs). Only files are filtered; every
+                 * other system shows everything as before. The extension was
+                 * already isolated once above (review: normalize per entry,
+                 * never per API call) - pass it, or "" when there is none. */
+                if (ext_filter_should_hide(sys_folder[0] ? sys_folder : NULL,
+                                           ext ? ext + 1 : "")) continue;
             }
             /* Always hide the internal "menu" folder at the root. */
             if (isdir && at_root && strcasecmp(e->d_name, "menu") == 0) continue;
             /* Media libraries live under Apps, not in the Games tab. */
             if (isdir && at_root && is_app_folder_name(e->d_name)) continue;
+            /* Inside a filtered system, per-game folders with no whitelisted
+             * file (e.g. a folder left behind after a dump was moved out) read
+             * as broken rows; skip them for the same reason as hide-empty. */
+            if (isdir && extf_on) {
+                char full[MAX_PATH_LEN];
+                snprintf(full, sizeof(full), "%s/%s", path, e->d_name);
+                if (!folder_has_games(full, 0)) continue;
+            }
             /* Hide-empty-folders: at the root, skip rom folders with no games.
              * Only reached for the handful of root folders, never per-ROM. */
             if (isdir && settings_hide_empty && at_root) {
@@ -2573,6 +2628,10 @@ static void search_walk(const char *dir, int depth) {
     DIR *d = opendir(dir);
     if (!d) return;
     struct dirent *e;
+    char sys_folder[64];
+    const char *sf = get_console_folder(dir);
+    if (sf) { strncpy(sys_folder, sf, sizeof(sys_folder) - 1); sys_folder[sizeof(sys_folder) - 1] = '\0'; }
+    else sys_folder[0] = '\0';
     while ((e = readdir(d)) && search_results_count < 2000) {
         if (e->d_name[0] == '.') continue;
         char p[MAX_PATH_LEN];
@@ -2582,6 +2641,12 @@ static void search_walk(const char *dir, int depth) {
         if (S_ISDIR(st.st_mode)) {
             if (depth < 3) search_walk(p, depth + 1);
         } else if (str_icontains(e->d_name, search_query)) {
+            /* Same per-system whitelist as the browser, so search results never
+             * resurrect the hidden companion files (PS1 .bin tracks). The
+             * extension is isolated once here (review: normalize per entry). */
+            const char *ext = strrchr(e->d_name, '.');
+            if (ext_filter_should_hide(sys_folder[0] ? sys_folder : NULL,
+                                       ext ? ext + 1 : "")) continue;
             search_add_result(e->d_name, p);
         }
     }
@@ -2679,37 +2744,217 @@ static void handle_search_kbd(void) {
     }
 }
 
+/* Extension-entry mode of the on-screen keyboard (review request): reuses
+ * the search keyboard (same rows/keys) to let the user type a custom
+ * extension for the folder's whitelist. START confirms (normalize lowercase
+ * without dot, save via ext_filter_toggle_ext), B cancels back to the
+ * picker with the cursor on the Add row. */
+static bool extf_kbd_active = false;
+static char extf_kbd_text[EXT_FILTER_EXT_LEN + 2];   /* room for dot typing */
+
+/* Extension-entry keyboard (review request): same keys/rows as the search
+ * keyboard. The special row's "search" slot acts as CONFIRM: normalize the
+ * typed text to lowercase without the leading dot, add it to the folder's
+ * whitelist (persisted), mark the picker dirty and drop back into it.
+ * B cancels without saving. Text is capped at the extension length. */
+static void handle_extf_kbd(void) {
+    if (input_was_pressed(FROG_BTN_UP))    search_kbd_r = (search_kbd_r - 1 + KBD_NROWS) % KBD_NROWS;
+    if (input_was_pressed(FROG_BTN_DOWN))  search_kbd_r = (search_kbd_r + 1) % KBD_NROWS;
+    if (input_was_pressed(FROG_BTN_LEFT))  search_kbd_c--;
+    if (input_was_pressed(FROG_BTN_RIGHT)) search_kbd_c++;
+    { int rl = kbd_row_len(search_kbd_r);
+      if (search_kbd_c < 0) search_kbd_c = rl - 1;
+      if (search_kbd_c >= rl) search_kbd_c = 0; }
+    int len = (int)strlen(extf_kbd_text);
+    if (input_was_pressed(FROG_BTN_A)) {
+        if (search_kbd_r == KBD_SPECIAL_ROW) {
+            if (search_kbd_c == 0) {         /* space: ignore, no spaces in exts */
+            } else if (search_kbd_c == 1) {  /* backspace */
+                if (len > 0) extf_kbd_text[len-1] = '\0';
+            } else {                         /* CONFIRM */
+                if (ext_filter_toggle_ext(extf_folder, extf_kbd_text)) {
+                    extf_dirty = true;
+                    ui_toast_show("Extension added");
+                } else {
+                    ui_toast_show("Invalid or duplicate");
+                }
+                extf_kbd_active = false;
+                return;
+            }
+        } else if (len < (int)sizeof(extf_kbd_text) - 1) {
+            extf_kbd_text[len] = KBD_ROWS[search_kbd_r][search_kbd_c];
+            extf_kbd_text[len+1] = '\0';
+        }
+    }
+    if (input_was_pressed(FROG_BTN_Y)) {            /* quick backspace */
+        if (len > 0) extf_kbd_text[len-1] = '\0';
+    }
+    if (input_was_pressed(FROG_BTN_START)) {        /* START also confirms */
+        if (extf_kbd_text[0] && ext_filter_toggle_ext(extf_folder, extf_kbd_text)) {
+            extf_dirty = true;
+            ui_toast_show("Extension added");
+        } else {
+            ui_toast_show("Invalid or duplicate");
+        }
+        extf_kbd_active = false;
+        return;
+    }
+    if (input_was_pressed(FROG_BTN_B))              /* cancel ??? back to picker */
+        extf_kbd_active = false;
+}
+
 /* Rows the picker actually draws: one VISIBLE_ENTRIES slot is used by the
  * subtitle (see render_core_picker), so scroll math must match or the cursor
  * lands on an undrawn row and vanishes. */
 #define PICKER_ROWS ((VISIBLE_ENTRIES - 1) < 1 ? 1 : (VISIBLE_ENTRIES - 1))
+#define EXTF_POOL_N ((int)(sizeof(extf_pool) / sizeof(extf_pool[0])) - 1)
+
+/* Flat model of a picker row, rebuilt on every open/section toggle. Both
+ * section headers are selectable: LEFT/RIGHT (or A) on ">> Cores" / 
+ * ">> EXTENSIONS" collapses/expands that section so long core lists can be
+ * skipped with one press. */
+enum {
+    PR_CORE_HDR,   /* ">> Cores [-]" section header */
+    PR_CORE,       /* "Default (auto)" / one core per row */
+    PR_EXT_HDR,    /* ">> EXTENSIONS [-]" section header (filter folders only) */
+    PR_EXT_TOGGLE, /* "Filter files: ON/OFF" */
+    PR_EXT_BOX,    /* "[x] .cue" */
+    PR_EXT_ADD     /* "Add extension..." (opens the on-screen keyboard) */
+};
+typedef struct { int type; int core; int ext; } PickerRow;
+static PickerRow picker_rows_buf[256];
+static int picker_rows_n = 0;
+
+static void picker_rows_build(void) {
+    int n = 0;
+    picker_rows_buf[n].type = PR_CORE_HDR; picker_rows_buf[n].core = -1; picker_rows_buf[n].ext = -1; n++;
+    if (extf_cores_open)
+        for (int i = 0; i < core_choice_count; i++) {
+            if (n >= (int)(sizeof(picker_rows_buf)/sizeof(picker_rows_buf[0]))) break;
+            picker_rows_buf[n].type = PR_CORE; picker_rows_buf[n].core = i; picker_rows_buf[n].ext = -1; n++;
+        }
+    if (extf_in_picker) {
+        if (n >= (int)(sizeof(picker_rows_buf)/sizeof(picker_rows_buf[0]))) { picker_rows_n = n; return; }
+        picker_rows_buf[n].type = PR_EXT_HDR; picker_rows_buf[n].core = -1; picker_rows_buf[n].ext = -1; n++;
+        if (extf_exts_open) {
+            if (n >= (int)(sizeof(picker_rows_buf)/sizeof(picker_rows_buf[0]))) { picker_rows_n = n; return; }
+            picker_rows_buf[n].type = PR_EXT_TOGGLE; picker_rows_buf[n].core = -1; picker_rows_buf[n].ext = -1; n++;
+            for (int e = 0; e < EXTF_POOL_N; e++) {
+                if (n >= (int)(sizeof(picker_rows_buf)/sizeof(picker_rows_buf[0]))) break;
+                picker_rows_buf[n].type = PR_EXT_BOX; picker_rows_buf[n].core = -1; picker_rows_buf[n].ext = e; n++;
+            }
+            /* Custom extensions stored for this folder come after the pool. */
+            int custom_n = ext_filter_ext_count(extf_folder);
+            for (int e = 0; e < custom_n; e++) {
+                if (n >= (int)(sizeof(picker_rows_buf)/sizeof(picker_rows_buf[0]))) break;
+                picker_rows_buf[n].type = PR_EXT_BOX; picker_rows_buf[n].core = -1;
+                picker_rows_buf[n].ext = EXTF_POOL_N + e;   /* stored-list index */
+                n++;
+            }
+            if (n < (int)(sizeof(picker_rows_buf)/sizeof(picker_rows_buf[0]))) {
+                picker_rows_buf[n].type = PR_EXT_ADD; picker_rows_buf[n].core = -1; picker_rows_buf[n].ext = -1; n++;
+            }
+        }
+    }
+    picker_rows_n = n;
+}
+
+/* Move the cursor onto the (first) row of the given type after a rebuild. */
+static void picker_cursor_to(int type) {
+    for (int i = 0; i < picker_rows_n; i++)
+        if (picker_rows_buf[i].type == type) { core_picker_idx = i; break; }
+}
 
 static void handle_core_picker(void) {
+    picker_rows_build();
+    int total = picker_rows_n;
     if (input_was_pressed(FROG_BTN_UP)) {
-        core_picker_idx = (core_picker_idx - 1 + core_choice_count) % core_choice_count;
+        core_picker_idx = (core_picker_idx - 1 + total) % total;
     }
     if (input_was_pressed(FROG_BTN_DOWN)) {
-        core_picker_idx = (core_picker_idx + 1) % core_choice_count;
+        core_picker_idx = (core_picker_idx + 1) % total;
     }
     if (input_was_pressed(FROG_BTN_LEFT)) {
-        core_picker_idx -= PICKER_ROWS;
-        if (core_picker_idx < 0) core_picker_idx = 0;
+        int t = picker_rows_buf[core_picker_idx].type;
+        if (t == PR_CORE_HDR || t == PR_EXT_HDR) {
+            if (t == PR_CORE_HDR) extf_cores_open = !extf_cores_open;
+            else                 extf_exts_open  = !extf_exts_open;
+            picker_rows_build();
+            total = picker_rows_n;
+            picker_cursor_to(t);   /* stay on the header we just flipped */
+        } else {
+            core_picker_idx -= PICKER_ROWS;
+            if (core_picker_idx < 0) core_picker_idx = 0;
+        }
     }
     if (input_was_pressed(FROG_BTN_RIGHT)) {
-        core_picker_idx += PICKER_ROWS;
-        if (core_picker_idx >= core_choice_count) core_picker_idx = core_choice_count - 1;
+        int t = picker_rows_buf[core_picker_idx].type;
+        if (t == PR_CORE_HDR || t == PR_EXT_HDR) {
+            if (t == PR_CORE_HDR) extf_cores_open = true;
+            else                 extf_exts_open  = true;
+            picker_rows_build();
+            total = picker_rows_n;
+        } else {
+            core_picker_idx += PICKER_ROWS;
+            if (core_picker_idx >= total) core_picker_idx = total - 1;
+        }
     }
     if (core_picker_idx < core_picker_scroll)
         core_picker_scroll = core_picker_idx;
     if (core_picker_idx >= core_picker_scroll + PICKER_ROWS)
         core_picker_scroll = core_picker_idx - PICKER_ROWS + 1;
     if (input_was_pressed(FROG_BTN_A)) {
-        core_override_set(core_picker_key, core_choices[core_picker_idx].path);
-        ui_toast_show(core_picker_idx == 0 ? "Core override cleared" : "Core saved for this item");
-        core_picker_active = false;
+        int t = picker_rows_buf[core_picker_idx].type;
+        if (t == PR_CORE_HDR || t == PR_EXT_HDR) {
+            /* A on a header flips its section (same as LEFT). */
+            if (t == PR_CORE_HDR) extf_cores_open = !extf_cores_open;
+            else                 extf_exts_open  = !extf_exts_open;
+            picker_rows_build();
+            total = picker_rows_n;
+            picker_cursor_to(t);
+        } else if (t == PR_EXT_TOGGLE) {
+            ext_filter_set_enabled(extf_folder, !ext_filter_get_enabled(extf_folder));
+            extf_dirty = true;
+        } else if (t == PR_EXT_BOX) {
+            int ei = picker_rows_buf[core_picker_idx].ext;
+            if (ei < EXTF_POOL_N)
+                ext_filter_toggle_ext(extf_folder, extf_pool[ei]);
+            else {
+                /* stored (custom) extension: resolve by index */
+                char ext[EXT_FILTER_EXT_LEN + 1];
+                if (ext_filter_get_ext_at(extf_folder, ei - EXTF_POOL_N, ext, sizeof ext))
+                    ext_filter_toggle_ext(extf_folder, ext);   /* toggling removes it */
+            }
+            extf_dirty = true;
+        } else if (t == PR_EXT_ADD) {
+            /* Open the on-screen keyboard in extension-entry mode. */
+            extf_kbd_active = true;
+            extf_kbd_text[0] = '\0';
+            search_kbd_r = 0; search_kbd_c = 0;
+        } else if (t == PR_CORE) {
+            int cidx = picker_rows_buf[core_picker_idx].core;
+            core_override_set(core_picker_key, core_choices[cidx].path);
+            ui_toast_show(cidx == 0 ? "Core override cleared" : "Core saved for this item");
+            core_picker_active = false;
+        }
     }
     if (input_was_pressed(FROG_BTN_B)) {
         core_picker_active = false;
+    }
+    /* Leaving the picker (either button) after a filter edit: the dir mtime
+     * didn't move, so drop the affected cached listings by hand and rescan
+     * if we are sitting inside the filtered folder. The current view's cache
+     * is dropped too: with hide-empty on, a root listing may need the folder
+     * back (or gone) even when the folder's own mtime is unchanged. */
+    if (!core_picker_active && extf_in_picker && extf_dirty) {
+        char cf[MAX_PATH_LEN];
+        cache_file_for(extf_path, cf, sizeof cf);
+        unlink(cf);
+        cache_file_for(current_path, cf, sizeof cf);
+        unlink(cf);
+        if (extf_inside)
+            scan_directory(current_path);
+        extf_dirty = false;
     }
 }
 
@@ -3333,6 +3578,12 @@ static void handle_input(void) {
         return;
     }
 
+    /* Extension-entry keyboard overlay (SELECT picker ??? Add extension...) */
+    if (extf_kbd_active) {
+        handle_extf_kbd();
+        return;
+    }
+
     /* Core picker overlay: choose an override core for the current ROM/folder */
     if (core_picker_active) {
         handle_core_picker();
@@ -3400,11 +3651,41 @@ static void handle_input(void) {
                      entries[selected_index].name);
             cur = core_override_lookup(core_picker_key, NULL);
         }
+        /* Cursor lands on the active core's row (or the first core row when
+         * the section is collapsed). */
         core_picker_idx = core_choice_index_for_path(cur);
-        core_picker_current = core_picker_idx;   /* the active core, marked ">>" */
+        core_picker_current = core_picker_idx;   /* the active core, marked "* " */
+        extf_cores_open = true;
+        extf_exts_open = true;
+        core_picker_idx += 1;                    /* +1: ">> Cores" header row */
         core_picker_scroll = 0;
         if (core_picker_idx >= PICKER_ROWS)
             core_picker_scroll = core_picker_idx - PICKER_ROWS + 1;
+        /* Extension whitelist block (PS1 family) sits ABOVE the core list.
+         * Show it when SELECTing a filtered system folder itself, or when the
+         * picker is opened on a ROM file inside one. */
+        extf_in_picker = false;
+        extf_inside = false;
+        if (entries[selected_index].is_dir) {
+            if (ext_filter_has_list(entries[selected_index].name)) {
+                extf_in_picker = true;
+                strncpy(extf_folder, entries[selected_index].name, sizeof(extf_folder) - 1);
+                extf_folder[sizeof(extf_folder) - 1] = '\0';
+                snprintf(extf_path, sizeof(extf_path), "%s/%s",
+                         current_path, entries[selected_index].name);
+            }
+        } else {
+            const char *cf = get_console_folder(current_path);
+            if (cf && ext_filter_has_list(cf)) {
+                extf_in_picker = true;
+                extf_inside = true;
+                strncpy(extf_folder, cf, sizeof(extf_folder) - 1);
+                extf_folder[sizeof(extf_folder) - 1] = '\0';
+                strncpy(extf_path, current_path, sizeof(extf_path) - 1);
+                extf_path[sizeof(extf_path) - 1] = '\0';
+            }
+        }
+        extf_dirty = false;
         core_picker_active = true;
         return;
     }
@@ -3757,6 +4038,7 @@ void retro_init(void) {
     favorites_init();
     dbg("favorites_init done");
     core_override_load();
+    ext_filter_load();
     build_core_choices();
     dbg("core overrides loaded");
 
@@ -3915,20 +4197,69 @@ static void render_core_picker(void) {
     font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, core_picker_title, COLOR_TEXT);
     y += ITEM_HEIGHT;
 
-    int visible = min(core_choice_count - core_picker_scroll, PICKER_ROWS);
-    for (int i = 0; i < visible; i++) {
+    /* Draw the window of rows [scroll, scroll+PICKER_ROWS). Section headers
+     * draw like Settings dividers but stay selectable: the pillbox cursor
+     * lands on them, LEFT/RIGHT/A collapse or expand their section. */
+    int total = picker_rows_n;
+    for (int i = 0; i < PICKER_ROWS; i++) {
         int idx = core_picker_scroll + i;
-        /* ">> " marks the currently-active core; "   " keeps names aligned. */
+        if (idx >= total) break;
+        const PickerRow *r = &picker_rows_buf[idx];
         char line[96];
-        snprintf(line, sizeof(line), "%s%s",
-                 idx == core_picker_current ? ">> " : "   ", core_choices[idx].name);
+        switch (r->type) {
+        case PR_CORE_HDR:
+            snprintf(line, sizeof(line), ">> %s", "Cores");
+            break;
+        case PR_EXT_HDR:
+            snprintf(line, sizeof(line), ">> %s", "EXTENSIONS");
+            break;
+        case PR_EXT_TOGGLE:
+            snprintf(line, sizeof(line), "   Filter files: %s",
+                     ext_filter_get_enabled(extf_folder) ? "ON" : "OFF");
+            break;
+        case PR_EXT_BOX: {
+            char ext[EXT_FILTER_EXT_LEN + 1];
+            const char *extp;
+            if (r->ext < EXTF_POOL_N)
+                extp = extf_pool[r->ext];
+            else if (ext_filter_get_ext_at(extf_folder, r->ext - EXTF_POOL_N,
+                                          ext, sizeof ext))
+                extp = ext;
+            else
+                extp = "?";
+            snprintf(line, sizeof(line), "   [%c] .%s",
+                     ext_filter_has_ext(extf_folder, extp) ? 'x' : ' ', extp);
+            break;
+        }
+        case PR_EXT_ADD:
+            snprintf(line, sizeof(line), "   Add extension...");
+            break;
+        case PR_CORE:
+            /* "->" marks the currently-active core; ">> " is reserved for
+             * the section headers above. */
+            snprintf(line, sizeof(line), "%s%s",
+                     r->core == core_picker_current ? "-> " : "   ",
+                     core_choices[r->core].name);
+            break;
+        default:
+            line[0] = '\0';
+            break;
+        }
         int ry = y + i * ITEM_HEIGHT;
-        if (idx == core_picker_idx)
+        if (r->type == PR_CORE_HDR || r->type == PR_EXT_HDR) {
+            /* headers: accent color; pillbox when the cursor is on them */
+            if (idx == core_picker_idx)
+                render_text_pillbox(framebuffer, PADDING, ry, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+            else
+                font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, ry,
+                               line, COLOR_SELECT_BG);
+        } else if (idx == core_picker_idx) {
             render_text_pillbox(framebuffer, PADDING, ry, line, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
-        else
+        } else {
             font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, ry, line, COLOR_TEXT);
+        }
     }
-    render_scroll_indicator(framebuffer, core_choice_count, core_picker_idx, PICKER_ROWS);
+    render_scroll_indicator(framebuffer, total, core_picker_idx, PICKER_ROWS);
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
 
@@ -3957,6 +4288,39 @@ static void render_search_kbd(void) {
                 font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, cx, ry, lbl, COLOR_TEXT);
         }
     }
+    render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
+}
+
+/* Extension-entry keyboard: the search keyboard with an extension header and
+ * the typed text shown as ".<text>" (the dot is implied and stripped). */
+static void render_extf_kbd(void) {
+    render_clear_screen(framebuffer);
+    render_header(framebuffer, "ADD EXTENSION");
+
+    int y = START_Y;
+    char q[96];
+    snprintf(q, sizeof(q), ".%s_", extf_kbd_text);
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING, y, q, COLOR_TEXT);
+    y += ITEM_HEIGHT + UI_S(8);
+
+    int cw = UI_S(26), ch = ITEM_HEIGHT;
+    for (int r = 0; r < KBD_NROWS; r++) {
+        int rl = kbd_row_len(r);
+        int ry = y + r * ch;
+        for (int c = 0; c < rl; c++) {
+            char lbl[8];
+            int cx;
+            if (r == KBD_SPECIAL_ROW) { snprintf(lbl, sizeof(lbl), "%s", KBD_SPECIAL[c]); cx = PADDING + c * (cw * 3); }
+            else { lbl[0] = KBD_ROWS[r][c]; lbl[1] = '\0'; cx = PADDING + c * cw; }
+            if (r == search_kbd_r && c == search_kbd_c)
+                render_text_pillbox(framebuffer, cx, ry, lbl, COLOR_SELECT_BG, COLOR_SELECT_TEXT, 7);
+            else
+                font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, cx, ry, lbl, COLOR_TEXT);
+        }
+    }
+    font_draw_text(framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT, PADDING,
+                   y + KBD_NROWS * ch + UI_S(6),
+                   "A OK   B cancel", COLOR_TEXT);
     render_legend(framebuffer, LEGEND_X_NONE, 0, 0);
 }
 
@@ -4199,6 +4563,8 @@ void retro_run(void) {
         render_usb_confirm();
     } else if (search_kbd_active) {
         render_search_kbd();
+    } else if (extf_kbd_active) {
+        render_extf_kbd();
     } else if (core_picker_active) {
         render_core_picker();
     } else if (remap_wizard_active) {
