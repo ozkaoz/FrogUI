@@ -17,6 +17,18 @@ static stbtt_fontinfo fallback_info;
 static unsigned char *fallback_buffer = NULL;
 static float fallback_scale;
 static int fallback_loaded = 0;
+static stbtt_fontinfo latin_info;
+static unsigned char *latin_buffer = NULL;
+static float latin_scale;
+static int latin_loaded = 0;
+static int active_font_id = 0;
+static uint32_t utf8_next(const char **p);
+static uint32_t unicode_upper(uint32_t cp) {
+    if (cp >= 'a' && cp <= 'z') return cp - 32;
+    if (cp >= 0xE0 && cp <= 0xF6) return cp - 0x20;
+    if (cp >= 0xF8 && cp <= 0xFE) return cp - 0x20;
+    switch (cp) { case 0x0105:return 0x0104; case 0x0107:return 0x0106; case 0x0119:return 0x0118; case 0x0142:return 0x0141; case 0x0144:return 0x0143; case 0x015B:return 0x015A; case 0x017A:return 0x0179; case 0x017C:return 0x017B; default:return cp; }
+}
 
 #ifndef UI_SCALE
 #define UI_SCALE 100
@@ -154,6 +166,21 @@ static int load_fallback_font(void) {
     return 1;
 }
 
+static int load_latin_fallback(void) {
+    const char *paths[] = { "/mnt/sdcard/frogui/fonts/TreeFrogLatin.ttf", "/mnt/sdcard/cubegm/fonts/TreeFrogLatin.ttf", "fonts/TreeFrogLatin.ttf" };
+    FILE *fp = NULL; long size; int i;
+    if (latin_loaded) return 1;
+    for (i = 0; i < 3; i++) { fp = fopen(paths[i], "rb"); if (fp) break; }
+    if (!fp) return 0;
+    fseek(fp, 0, SEEK_END); size = ftell(fp); fseek(fp, 0, SEEK_SET);
+    if (size <= 0 || size > 4 * 1024 * 1024) { fclose(fp); return 0; }
+    latin_buffer = (unsigned char *)malloc((size_t)size);
+    if (!latin_buffer || fread(latin_buffer, 1, (size_t)size, fp) != (size_t)size) { free(latin_buffer); latin_buffer = NULL; fclose(fp); return 0; }
+    fclose(fp);
+    if (!stbtt_InitFont(&latin_info, latin_buffer, stbtt_GetFontOffsetForIndex(latin_buffer, 0))) { free(latin_buffer); latin_buffer = NULL; return 0; }
+    latin_scale = stbtt_ScaleForPixelHeight(&latin_info, FONT_SIZE); latin_loaded = 1; return 1;
+}
+
 /* Rasterize glyphs into a static buffer instead of stbtt_GetGlyphBitmap (which
  * mallocs per glyph per frame). On memory-pressured devices those allocs can
  * transiently fail -> draw bails -> glyphs vanish for a frame. Ported from the
@@ -251,7 +278,7 @@ static void font_draw_codepoint(uint16_t *framebuffer, int screen_width,
     int font_id = 0;
     int glyph_index;
     int slot = -1;
-    if (cp < 128) {
+    if (cp < 128 && active_font_id == 0) {
         char c = (char)cp;
         if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
         font_draw_char(framebuffer, screen_width, screen_height, x, y, c, color);
@@ -259,13 +286,15 @@ static void font_draw_codepoint(uint16_t *framebuffer, int screen_width,
     }
     if (!font_loaded) return;
     glyph_index = stbtt_FindGlyphIndex(info, (int)cp);
+    if (active_font_id == 1 && load_fallback_font()) { info = &fallback_info; scale = fallback_scale; font_id = 1; glyph_index = stbtt_FindGlyphIndex(info, (int)cp); }
+    else if (active_font_id == 2 && load_latin_fallback()) { info = &latin_info; scale = latin_scale; font_id = 2; glyph_index = stbtt_FindGlyphIndex(info, (int)cp); }
     if (!glyph_index) {
-        if (!load_fallback_font()) return;
-        info = &fallback_info;
-        scale = fallback_scale;
-        font_id = 1;
+        if (load_fallback_font()) { info = &fallback_info; scale = fallback_scale; font_id = 1; }
+        else if (load_latin_fallback()) { info = &latin_info; scale = latin_scale; font_id = 2; }
+        else return;
         glyph_index = stbtt_FindGlyphIndex(info, (int)cp);
     }
+    if (!glyph_index && font_id == 1 && load_latin_fallback()) { info = &latin_info; scale = latin_scale; font_id = 2; glyph_index = stbtt_FindGlyphIndex(info, (int)cp); }
     if (!glyph_index) return;
     for (int i = 128; i < 512; i++)
         if (gcache[i].valid && gcache[i].font_id == font_id && gcache[i].codepoint == cp) { slot = i; break; }
@@ -312,6 +341,24 @@ static void font_draw_codepoint(uint16_t *framebuffer, int screen_width,
     }
 }
 
+static int choose_text_font(const char *text) {
+    int need = 0; const char *p = text;
+    while (p && *p) {
+        uint32_t cp = unicode_upper(utf8_next(&p));
+        if (!stbtt_FindGlyphIndex(&font_info, (int)cp)) need = 1;
+    }
+    if (!need) return 0;
+    if (load_fallback_font()) {
+        p = text; int all = 1; while (*p) { uint32_t cp = utf8_next(&p); if (!stbtt_FindGlyphIndex(&fallback_info, (int)cp)) { all = 0; break; } }
+        if (all) return 1;
+    }
+    if (load_latin_fallback()) {
+        p = text; int all = 1; while (*p) { uint32_t cp = utf8_next(&p); if (!stbtt_FindGlyphIndex(&latin_info, (int)cp)) { all = 0; break; } }
+        if (all) return 2;
+    }
+    return 0;
+}
+
 static uint32_t utf8_next(const char **p) {
     const unsigned char *s = (const unsigned char *)*p;
     uint32_t cp;
@@ -348,6 +395,7 @@ void font_draw_text(uint16_t *framebuffer, int screen_width, int screen_height,
     if (!font_loaded || !framebuffer || !text) return;
 
     int start_x = x;
+    active_font_id = choose_text_font(text);
     int prev_glyph = 0;
 
     while (*text) {
@@ -360,20 +408,21 @@ void font_draw_text(uint16_t *framebuffer, int screen_width, int screen_height,
         }
 
         uint32_t cp = utf8_next(&text);
-        if (cp >= 'a' && cp <= 'z') cp -= ('a' - 'A');
+        cp = unicode_upper(cp);
         stbtt_fontinfo *info = &font_info;
         float scale = font_scale;
+        if (active_font_id == 1 && load_fallback_font()) { info = &fallback_info; scale = fallback_scale; }
+        else if (active_font_id == 2 && load_latin_fallback()) { info = &latin_info; scale = latin_scale; }
         int glyph_index = stbtt_FindGlyphIndex(info, (int)cp);
-        if (!glyph_index && cp >= 128 && load_fallback_font()) {
-            info = &fallback_info;
-            scale = fallback_scale;
-            glyph_index = stbtt_FindGlyphIndex(info, (int)cp);
+        if (!glyph_index && active_font_id == 0 && cp >= 128) {
+            if (load_fallback_font()) { info = &fallback_info; scale = fallback_scale; glyph_index = stbtt_FindGlyphIndex(info, (int)cp); }
+            if (!glyph_index && load_latin_fallback()) { info = &latin_info; scale = latin_scale; glyph_index = stbtt_FindGlyphIndex(info, (int)cp); }
         }
 
         if (glyph_index != 0) {
             // Get advance width and left side bearing
             int advance_width, left_side_bearing;
-            stbtt_GetGlyphHMetrics(&font_info, glyph_index, &advance_width, &left_side_bearing);
+            stbtt_GetGlyphHMetrics(info, glyph_index, &advance_width, &left_side_bearing);
 
             // Apply kerning if we have a previous character
             if (prev_glyph != 0) {
@@ -393,12 +442,14 @@ void font_draw_text(uint16_t *framebuffer, int screen_width, int screen_height,
             prev_glyph = 0;
         }
     }
+    active_font_id = 0;
 }
 
 int font_measure_text(const char *text) {
     if (!text || !font_loaded) return 0;
 
     int width = 0;
+    active_font_id = choose_text_font(text);
     int prev_glyph = 0;
 
     while (*text) {
@@ -410,14 +461,15 @@ int font_measure_text(const char *text) {
         }
 
         uint32_t cp = utf8_next(&text);
-        if (cp >= 'a' && cp <= 'z') cp -= ('a' - 'A');
+        cp = unicode_upper(cp);
         stbtt_fontinfo *info = &font_info;
         float scale = font_scale;
+        if (active_font_id == 1 && load_fallback_font()) { info = &fallback_info; scale = fallback_scale; }
+        else if (active_font_id == 2 && load_latin_fallback()) { info = &latin_info; scale = latin_scale; }
         int glyph_index = stbtt_FindGlyphIndex(info, (int)cp);
-        if (!glyph_index && cp >= 128 && load_fallback_font()) {
-            info = &fallback_info;
-            scale = fallback_scale;
-            glyph_index = stbtt_FindGlyphIndex(info, (int)cp);
+        if (!glyph_index && active_font_id == 0 && cp >= 128) {
+            if (load_fallback_font()) { info = &fallback_info; scale = fallback_scale; glyph_index = stbtt_FindGlyphIndex(info, (int)cp); }
+            if (!glyph_index && load_latin_fallback()) { info = &latin_info; scale = latin_scale; glyph_index = stbtt_FindGlyphIndex(info, (int)cp); }
         }
 
         if (glyph_index != 0) {
@@ -441,5 +493,6 @@ int font_measure_text(const char *text) {
         }
     }
 
+    active_font_id = 0;
     return width;
 }
